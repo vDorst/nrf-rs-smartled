@@ -1,0 +1,2 @@
+[workspace]
+members = ["nrf52-firmware", "pc-software", "uart-protocol"]

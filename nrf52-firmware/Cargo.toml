@@ -1,0 +1,40 @@
+[package]
+name = "nrf52-firmware"
+version = "0.2.0"
+authors = [ "René van Dorst <opensource@vdorst.com>" ]
+license = "MIT OR Apache-2.0"
+# 2021 changes the PWM burst to ~14.49m while 2018 is ~14.25mS
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+cortex-m = "0.7"
+cortex-m-rtic = { version = "1.0", default-features = false }
+cortex-m-rt = { version = "0.7.1", features = ["device"] }
+rtt-target = {version = "0.3", features = ["cortex-m"] }
+panic-rtt-target = { version = "0.1", features = ["cortex-m"] }
+nrf52840-hal = { version = "0.14", features = ["rt"] }
+# panic-halt = "0.2"
+embedded-dma = "0.2"
+heapless = "0.7"
+usb-device = "0.2"
+usbd-serial = "0.1"
+ringbuffer = { version = "0.8",  default-features = false }
+uart-protocol = { path = "../uart-protocol"}
+
+[dependencies.embedded-hal]
+version = "0.2.6"
+features = ["unproven"]
+
+[profile.dev]
+incremental = false
+codegen-units = 1
+debug = true
+lto = false
+
+[profile.release]
+codegen-units = 1
+debug = true
+lto = true
+opt-level = 3

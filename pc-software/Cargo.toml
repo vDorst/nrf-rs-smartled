@@ -1,0 +1,17 @@
+[package]
+name = "pc-software"
+version = "0.1.0"
+authors = [ "René van Dorst <opensource@vdorst.com>" ]
+license = "MIT OR Apache-2.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+serialport = "4.0.1"
+image = "0.23"
+font8x8 = { version = "0.3", default-features = false }
+pico-args = "0.4.2"
+rand = "0.8"
+colorsys = "0.6.5"
+uart-protocol = { path = "../uart-protocol"}
