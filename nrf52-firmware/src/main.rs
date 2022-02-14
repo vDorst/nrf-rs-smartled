@@ -52,8 +52,13 @@ use uart_protocol::{self, Programs, N_BYTES, N_LEDS, TOTAL_BYTES};
 
 pool!(FRAMEBUFFER: Deque<u8, TOTAL_BYTES>);
 
-const PWM_T0H: u16 = 6 | 0x8000;
-const PWM_T1H: u16 = 13 | 0x8000;
+// Number of leds programmed in a single run
+const PWM_N_LEDS: usize = 4;
+
+const PWM_POL: u16 = 0x8000;
+
+const PWM_T0H: u16 = 6 | PWM_POL;
+const PWM_T1H: u16 = 13 | PWM_POL;
 const PWM_MAX: u16 = 20;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -67,16 +72,17 @@ impl Led {
     fn pwm_next(&mut self, buf: &mut [u16]) {
         let mut n = 0;
 
-        let buf = buf.borrow_mut();
-        for mut d in [self.g, self.r, self.b] {
-            for _ in 0..8 {
-                buf[n] = if d & 0x80 != 0 { PWM_T1H } else { PWM_T0H };
-                d <<= 1;
-                n += 1;
+        for _ in 0..PWM_N_LEDS {
+            for mut d in [self.g, self.r, self.b] {
+                for _ in 0..8 {
+                    buf[n] = if d & 0x80 != 0 { PWM_T1H } else { PWM_T0H };
+                    d <<= 1;
+                    n += 1;
+                }
             }
         }
 
-        buf[24] = 0x8000;
+        buf[PWM_DMA_MEM_SIZE-1] = PWM_POL;
     }
 }
 
@@ -142,38 +148,43 @@ impl<'a> Frame {
     // }
 
     pub fn pwm_next(&mut self, buf: &mut [u16]) -> bool {
-        let has_data = !self.inner.is_empty();
-
-        if has_data {
-            let mut n = 0;
-
-            for _ in 0..N_BYTES {
-                if let Some(mut d) = self.inner.pop_front() {
-                    for _ in 0..8 {
-                        buf[n] = if d & 0x80 != 0 { PWM_T1H } else { PWM_T0H };
-                        d <<= 1;
-                        n += 1;
-                    }
+        let mut n = 0;
+        let mut d = 0;
+     
+        for (num, data) in buf[0..(PWM_N_LEDS * N_BYTES * 8)].iter_mut().enumerate() {
+            if num % 8 == 0 {
+                let val = self.inner.pop_front();
+                if val.is_none() {
+                    break;
                 }
+                d = val.unwrap();
+                n += 8;
             }
-
-            buf[N_BYTES * 8] = 0x8000;
-        } else {
-            for d in buf {
-                *d = 0x8000;
-            }
+                
+            *data = if d & 0x80 != 0 { PWM_T1H } else { PWM_T0H };
+            d <<= 1;
         }
 
-        has_data
+        // Allways fill remaining values with empty data
+        for d in buf[n..].iter_mut() {
+            *d = PWM_POL;
+        }
+
+        n != 0
     }
 }
+
+// This trivial implementation of `drop` adds a print to console.
+// impl Drop for Frame {
+//     fn drop(&mut self) {
+//     }
+// }
 
 // #[derive(PartialEq, Eq)]
 pub enum PwmData {
     SINGLE { repeat: u16, data: Led },
     RAW(Frame),
     EMPTY,
-    RESET(u16),
     SetProgram(Programs),
 }
 
@@ -197,7 +208,6 @@ impl PartialEq for PwmData {
                 },
             ) => l_repeat == r_repeat && l_data == r_data,
             (Self::RAW(_l0), Self::RAW(_r0)) => true,
-            (Self::RESET(l0), Self::RESET(r0)) => l0 == r0,
             (Self::SetProgram(l0), Self::SetProgram(r0)) => l0 == r0,
             _ => core::mem::discriminant(self) == core::mem::discriminant(other),
         }
@@ -223,7 +233,10 @@ const B: usize = 2;
 // const W: usize = 3;
 
 type USBBUS = Usbd<UsbPeripheral<'static>>;
-type SeqBuffer = &'static mut [u16; N_BYTES * 8 + 1];
+
+// PWM (DMA) Sequence memory
+const PWM_DMA_MEM_SIZE: usize = PWM_N_LEDS * N_BYTES * 8 + 1;
+type SeqBuffer = &'static mut [u16; PWM_DMA_MEM_SIZE];
 
 pub enum UsbState {
     WaitForCommand,
@@ -254,16 +267,14 @@ mod app {
         ser_buf_consumer: Consumer<'static, PwmData, 4>,
         tmr0: StopWatch,
         led_gr: Pin<Output<PushPull>>,
-        // _led_bl: Pin<Output<PushPull>>,
+        // `_led_bl: Pin<Output<PushPull>>,
         debug_pin: Pin<Output<PushPull>>,
         update_pin: Pin<Output<PushPull>>,
     }
 
     #[init(local = [memory: [u8; 4096] = [0; 4096], led_buf: Queue<PwmData, 4> = Queue::new(), ser_buf: Queue<PwmData, 4> = Queue::new(), usbbus: Option<UsbBusAllocator<USBBUS>> = None, clock: Option<hal::clocks::Clocks<ExternalOscillator, Internal, LfOscStopped>> =
-    None])]
+    None, pwm0_buffer: [u16; PWM_DMA_MEM_SIZE] = [0; PWM_DMA_MEM_SIZE]])]
     fn init(ctx: init::Context) -> (Shared, Local, init::Monotonics) {
-        static mut PWM0BUFFER: [u16; N_BYTES * 8 + 1] = [0; N_BYTES * 8 + 1];
-
         // static mut RADIO: Mutex<RefCell<Option<Radio<'static>>>> = Mutex::new(RefCell::new(None));
 
         let pos = FRAMEBUFFER::grow(ctx.local.memory);
@@ -346,18 +357,6 @@ mod app {
 
         let (mut led_buf_producer, led_buf_consumer) = ctx.local.led_buf.split();
 
-        // Clear all Leds!
-        led_buf_producer
-            .enqueue(PwmData::SINGLE {
-                data: Led {
-                    g: 0x00,
-                    r: 0x00,
-                    b: 0x00,
-                },
-                repeat: N_LEDS as u16,
-            })
-            .ok();
-
         // Set all leds to blue;
         led_buf_producer
             .enqueue(PwmData::SINGLE {
@@ -375,13 +374,13 @@ mod app {
         pwm.enable_interrupt(PwmEvent::SeqEnd(Seq::Seq0));
 
         let pwm = pwm
-            .load::<SeqBuffer, SeqBuffer>(Some(unsafe { &mut PWM0BUFFER }), None, false)
+            .load::<SeqBuffer, SeqBuffer>(Some(ctx.local.pwm0_buffer), None, false)
             .ok();
 
         update_pwm::spawn(true).unwrap();
 
-        // FPS Timer 100Hz
-        let mut tmr0 = StopWatch::new(ctx.device.TIMER0, 10000);
+        // FPS Timer 120Hz, needed for USB pool()!
+        let mut tmr0 = StopWatch::new(ctx.device.TIMER0, 8333);
         tmr0.start();
 
         let (ser_buf_producer, ser_buf_consumer) = ctx.local.ser_buf.split();
@@ -420,7 +419,7 @@ mod app {
         }
 
         let dp = ctx.local.debug_pin;
-        dp.set_high().unwrap();
+        // dp.set_high().unwrap();
 
         // Check is something in the queue.
         if *STATE == PwmData::EMPTY {
@@ -429,57 +428,51 @@ mod app {
             }
         }
 
-        //ctx.shared.pwm.lock(|local_pwm| {
-            let local_pwm = ctx.shared.pwm;
-            if let Some(pwm) = local_pwm.take() {
-                *local_pwm = match STATE {
-                    PwmData::EMPTY => {
-                        pwm.stop();
+        let local_pwm = ctx.shared.pwm;
+        if let Some(pwm) = local_pwm.take() {
+            *local_pwm = match STATE {
+                PwmData::EMPTY => {
+                    dp.set_low().unwrap();
+                    pwm.stop();
+                    Some(pwm)
+                }
+                PwmData::SINGLE { repeat, data } => {
+                    let (buf0, buf1, pwm) = pwm.split();
+                    let buf0 = buf0.unwrap();
+                    if *repeat == 0 {
+                        for data in buf0.iter_mut() {
+                            *data = PWM_POL;
+                        }
                         dp.set_low().unwrap();
-                        Some(pwm)
+                        *STATE = PwmData::EMPTY;
+                    } else {
+                        data.pwm_next(buf0);
+                        *repeat -= 1;
                     }
-                    PwmData::SINGLE { repeat, data } => {
-                        let (buf0, buf1, pwm) = pwm.split();
-                        let buf0 = buf0.unwrap();
-                        if *repeat == 0 {
-                            for data in buf0.iter_mut().take(24) {
-                                *data = 0x8000;
-                            }
-                            *STATE = PwmData::RESET(1);
-                        } else {
-                            data.pwm_next(buf0);
-                            *repeat -= 1;
-                        }
+                    pwm.load(Some(buf0), buf1, true).ok()
+                }
+                PwmData::RAW(p) => {
+                    let (buf0, buf1, pwm) = pwm.split();
+                    
+                    let (buf0, start_pwm) = if let Some(buf0) = buf0 {
+                        let next_data = p.pwm_next(buf0);
                         dp.set_high().unwrap();
-                        pwm.load(Some(buf0), buf1, true).ok()
-                    }
-                    PwmData::RAW(p) => {
-                        let (buf0, buf1, pwm) = pwm.split();
-                        if let Some(buf0) = buf0 {
-                            let next_data = p.pwm_next(buf0);
-                            if !next_data {
-                                drop(p);
-                                *STATE = PwmData::RESET(1);
-                            }
-                            dp.set_high().unwrap();
-                            pwm.load(Some(buf0), buf1, true).ok()
-                        } else {
-                            pwm.load(buf0, buf1, false).ok()
-                        }
-                    }
-                    PwmData::RESET(n) => {
-                        if *n == 0 {
+                        if !next_data {
                             *STATE = PwmData::EMPTY;
-                        } else {
-                            *n -= 1;
-                        }
-                        let (buf0, buf1, pwm) = pwm.split();
-                        pwm.load(buf0, buf1, true).ok()
-                    }
-                    PwmData::SetProgram(_) => Some(pwm),
-                };
-            }
-        //});
+                            dp.set_low().unwrap();
+                        }                        
+                        (Some(buf0), true)
+                    } else {
+                        (None, false)
+                    };
+                    
+                    pwm.load(buf0, buf1, start_pwm).ok()
+                }
+                PwmData::SetProgram(_) => Some(pwm),
+            };
+        }
+
+        //dp.set_low().unwrap();
     }
 
     #[task(priority = 3, local = [led_buf_producer,update_pin])]
