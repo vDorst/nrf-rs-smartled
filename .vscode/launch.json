@@ -5,13 +5,12 @@
     "version": "0.2.0",
     "configurations": [
         {
-            // "preLaunchTask": ["cargo", "build", "--release"],
             "preLaunchTask": "${defaultBuildTask}",
             "type": "probe-rs-debug",
             "request": "launch",
             "name": "probe_rs Executable Test",
             "cwd": "${workspaceFolder}",
-            "programBinary": "/home/rene/dev/rust/nrf/target/thumbv7em-none-eabihf/release/nrf52-firmware",
+            "programBinary": "target/thumbv7em-none-eabihf/release/nrf52-firmware",
             "chip": "NRF52840_xxAA",
             "runtimeExecutable": "probe-rs-debugger",
             "runtimeArgs": [

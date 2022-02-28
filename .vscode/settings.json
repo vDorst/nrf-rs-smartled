@@ -1,0 +1,6 @@
+{
+    "rust-analyzer.linkedProjects": [
+        "Cargo.toml",
+        "nrf-firmware/Cargo.toml",
+    ]
+}

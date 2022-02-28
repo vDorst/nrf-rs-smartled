@@ -8,7 +8,8 @@ runner = "qemu-system-arm -cpu cortex-m3 -machine lm3s6965evb -nographic -semiho
 runner = "qemu-system-arm -cpu cortex-m4 -machine lm3s6965evb -nographic -semihosting-config enable=on,target=native -kernel"
 
 [target.thumbv7em-none-eabihf]
-runner = "qemu-system-arm -cpu cortex-m4 -machine lm3s6965evb -nographic -semihosting-config enable=on,target=native -kernel"
+runner = "probe-run --chip nRF52840_xxAA"
+
 
 [target.'cfg(all(target_arch = "arm", target_os = "none"))']
 # uncomment ONE of these three option to make `cargo run` start a GDB session
@@ -16,10 +17,15 @@ runner = "qemu-system-arm -cpu cortex-m4 -machine lm3s6965evb -nographic -semiho
 # runner = "arm-none-eabi-gdb -q -x openocd.gdb"
 # runner = "gdb-multiarch -q -x openocd.gdb"
 # runner = "gdb -q -x openocd.gdb"
+runner = "probe-run --chip nRF52840_xxAA"
 
 rustflags = [
   # LLD (shipped with the Rust toolchain) is used as the default linker
   "-C", "link-arg=-Tlink.x",
+  "-C", "link-arg=--nmagic",
+  "-C", "link-arg=-Tdefmt.x",
+  "-C", "linker=flip-link", 
+
 
   # if you run into problems with LLD switch to the GNU linker by commenting out
   # this line
