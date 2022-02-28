@@ -483,11 +483,12 @@ mod app {
             .local
             .led_buf_producer
             .enqueue(PwmData::RAW(input))
-            .is_err()
+            .is_ok()
         {
-            rprintln!("pwm_enqueue");
-        }
-        update_pwm::spawn(true).ok();
+		update_pwm::spawn(true).ok();
+        } else {
+		// rprintln!("pwm_enqueue");
+	}        
         led.set_low().unwrap();
     }
 
