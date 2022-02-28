@@ -9,9 +9,22 @@ edition = "2021"
 
 [dependencies]
 serialport = "4.0.1"
-image = "0.23"
+image = "0.24"
 font8x8 = { version = "0.3", default-features = false }
 pico-args = "0.4.2"
 rand = "0.8"
 colorsys = "0.6.5"
 uart-protocol = { path = "../uart-protocol"}
+signal-hook = "0.3"
+
+[profile.dev]
+incremental = false
+codegen-units = 1
+debug = true
+lto = false
+
+[profile.release]
+codegen-units = 1
+debug = true
+lto = true
+opt-level = 3

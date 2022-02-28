@@ -1,9 +1,16 @@
 // use crossterm;
 use image::{self, GenericImageView, Pixel};
 use serialport;
+use signal_hook::consts::SIGINT;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::{thread, time::Duration};
 
 fn main() {
+    let term = Arc::new(AtomicBool::new(false));
+    signal_hook::flag::register(SIGINT, Arc::clone(&term)).unwrap();
     let mut port = serialport::new("/dev/ttyACM0", 115_200)
         .timeout(Duration::from_millis(1000))
         .open()
@@ -49,6 +56,10 @@ fn main() {
         match port.write(serial_buf.as_ref()) {
             Ok(_) => (),
             Err(e) => println!("e {:?}", e),
+        }
+
+        if term.load(Ordering::Relaxed) {
+            break;
         }
         thread::sleep(time_delay);
     }

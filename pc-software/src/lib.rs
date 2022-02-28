@@ -1,9 +1,11 @@
-
 use serialport::{self, SerialPort};
-pub use uart_protocol::Programs;
 use uart_protocol::Commands;
+pub use uart_protocol::Programs;
 
-use std::{time::Duration, io::{Error, ErrorKind}};
+use std::{
+    io::{Error, ErrorKind},
+    time::Duration,
+};
 
 pub struct UartLeds {
     ser_dev: Box<dyn SerialPort>,
@@ -14,11 +16,12 @@ impl UartLeds {
     pub fn new(port: &str) -> Result<Self, String> {
         let ser_dev = match serialport::new(port, 115_200)
             .timeout(Duration::from_millis(100))
-            .open() {
-                Err(e) => return Err(format!("{:?}", e)),
-                Ok(dev) => dev,
-            };
-        let mut s =  Self {
+            .open()
+        {
+            Err(e) => return Err(format!("{:?}", e)),
+            Ok(dev) => dev,
+        };
+        let mut s = Self {
             ser_dev,
             ser_buf: [0; 1024],
         };
@@ -42,15 +45,25 @@ impl UartLeds {
         self.write_command(command)
     }
 
-
     pub fn write_command(&mut self, command: Commands) -> Result<(), Error> {
         let data = match command.to_slice(self.ser_buf.as_mut()) {
-            None => return Err(Error::new(ErrorKind::Other, "can't convert command to slice!")),
+            None => {
+                return Err(Error::new(
+                    ErrorKind::Other,
+                    "can't convert command to slice!",
+                ))
+            }
             Some(data) => data,
         };
         match self.ser_dev.write(data) {
             Ok(_num) => Ok(()),
             Err(e) => Err(e),
         }
+    }
+
+    pub fn restore_program(&mut self) -> Result<(), Error> {
+        let command = Commands::SetProgram(Programs::Two);
+
+        self.write_command(command)
     }
 }

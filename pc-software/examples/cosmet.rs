@@ -1,7 +1,11 @@
-// use crossterm;
-use rand::{self, Rng};
-use std::{thread, time::Duration};
 use pc_software::UartLeds;
+use rand::{self, Rng};
+use signal_hook::consts::SIGINT;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use std::{thread, time::Duration};
 
 const N_LEDS: usize = 300;
 
@@ -13,10 +17,13 @@ fn effect(led: &mut u8) {
 }
 
 fn main() {
+    let term = Arc::new(AtomicBool::new(false));
+    signal_hook::flag::register(SIGINT, Arc::clone(&term)).unwrap();
+
     let mut buf = [0u8; N_LEDS * 3];
 
     let mut port = UartLeds::new("/dev/ttyACM0").unwrap();
-    let time_delay = Duration::from_millis(30);
+    let time_delay = Duration::from_millis(20);
 
     //rand::thread_rng().fill_bytes(&mut buf);
 
@@ -55,18 +62,12 @@ fn main() {
                     break 'lus;
                 }
             }
+            if term.load(Ordering::Relaxed) {
+                break 'lus;
+            }
             thread::sleep(time_delay);
         }
     }
+
+    let _ = port.restore_program();
 }
-
-// fn shift_up<P, Container>(buf: &mut ImageBuffer<Rgb<u8>, Container>)
-// where
-//     P: Pixel + 'static,
-//     P::Subpixel: 'static,
-
-//     Container: Deref<Target = [P::Subpixel]> + DerefMut,
-// {
-//     let (size_x, size_y) = buf.dimensions();
-
-// }

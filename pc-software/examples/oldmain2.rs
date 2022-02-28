@@ -1,5 +1,5 @@
-use std::{thread, time::Duration};
 use pc_software::UartLeds;
+use std::{thread, time::Duration};
 
 #[allow(non_camel_case_types)]
 enum State {

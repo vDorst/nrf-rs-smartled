@@ -1,9 +1,8 @@
-// use crossterm;
 use font8x8::legacy::BASIC_LEGACY;
 use image::{self, Pixel, Rgb};
+use pc_software::UartLeds;
 use rand::{self, RngCore};
 use std::{thread, time::Duration};
-use pc_software::UartLeds;
 
 struct AppArgs {
     bg: u32,
@@ -96,7 +95,7 @@ fn main() {
 
     let mut port = UartLeds::new("/dev/ttyACM0").unwrap();
 
-    let mut buf = [0x1Fu8; N_LEDS * 3];    
+    let mut buf = [0x1Fu8; N_LEDS * 3];
 
     let time_delay = Duration::from_millis(pargs.speed as u64);
 
@@ -196,14 +195,3 @@ fn main() {
         }
     }
 }
-
-// fn shift_up<P, Container>(buf: &mut ImageBuffer<Rgb<u8>, Container>)
-// where
-//     P: Pixel + 'static,
-//     P::Subpixel: 'static,
-
-//     Container: Deref<Target = [P::Subpixel]> + DerefMut,
-// {
-//     let (size_x, size_y) = buf.dimensions();
-
-// }
