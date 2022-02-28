@@ -2,21 +2,17 @@
 #![no_std]
 
 mod timers;
-
 use timers::StopWatch;
 
-// extern crate panic_halt;
+use defmt_rtt as _; // global logger
+use panic_probe as _;
 
-// Panic handler
-//#[cfg(not(test))]
-use panic_rtt_target as _;
-use rtt_target::{rprintln, rtt_init_print};
-
-// extern crate panic_halt;
-// use core::ops::Deref;
-use core::borrow::BorrowMut;
-
-// use cortex_m::interrupt::Mutex;
+// same panicking *behavior* as `panic-probe` but doesn't print a panic message
+// this prevents the panic message being printed *twice* when `defmt::panic` is invoked
+#[defmt::panic_handler]
+fn panic() -> ! {
+    cortex_m::asm::udf()
+}
 
 use embedded_hal::digital::v2::OutputPin;
 
@@ -285,9 +281,10 @@ mod app {
 
         let clock = &*ctx.local.clock.as_ref().unwrap();
 
-        rtt_init_print!();
-        rprintln!("Initializing…");
-        rprintln!(
+        defmt::println!("test");
+
+        defmt::info!("init");
+        defmt::info!(
             "PwmData size: {} pos = {}",
             core::mem::size_of::<PwmData>(),
             pos
@@ -463,6 +460,7 @@ mod app {
                         }                        
                         (Some(buf0), true)
                     } else {
+                        defmt::println!("NoBUF0");
                         (None, false)
                     };
                     
@@ -487,7 +485,7 @@ mod app {
         {
 		update_pwm::spawn(true).ok();
         } else {
-		// rprintln!("pwm_enqueue");
+		// defmt::println!("pwm_enqueue");
 	}        
         led.set_low().unwrap();
     }
@@ -574,10 +572,10 @@ mod app {
                 // Push
                 pwm_enqueue::spawn(buf).ok();
             } else {
-                rprintln!("copy_from_slice");
+                defmt::println!("copy_from_slice");
             }
         } else {
-            rprintln!("No buf!");
+            // defmt::println!("No buf!");
         }
     }
 
@@ -689,10 +687,10 @@ mod app {
                 // Push
                 pwm_enqueue::spawn(buf).ok();
             } else {
-                rprintln!("copy_from_slice");
+                // defmt::println!("copy_from_slice");
             }
         } else {
-            rprintln!("No buf!");
+            // defmt::println!("No buf!");
         }
     }
 
@@ -726,7 +724,7 @@ mod app {
                         UsbState::WaitForCommand => match (USB_BUFFER[0], count) {
                             (0, 2) => {
                                 let prg = Programs::from_bytes(USB_BUFFER[1]);
-                                rprintln!("Set Program: {:?}", prg);
+                                // defmt::println!("Set Program: {:?}", prg);
                                 Some(PwmData::SetProgram(prg))
                             }
                             (1, cnt) => {
@@ -772,12 +770,12 @@ mod app {
                                 }
                             }
                             (_, _) => {
-                                rprintln!(
-                                    "Frame Drop: {:x} {:x} {:x}",
-                                    USB_BUFFER[0],
-                                    USB_BUFFER[1],
-                                    USB_BUFFER[2]
-                                );
+                                // defmt::println!(
+                                //     "Frame Drop: {:x} {:x} {:x}",
+                                //     USB_BUFFER[0],
+                                //     USB_BUFFER[1],
+                                //     USB_BUFFER[2]
+                                // );
                                 None
                             }
                         },
@@ -811,7 +809,9 @@ mod app {
                     };
 
                     if let Some(data) = res {
-                        ctx.local.ser_buf_producer.enqueue(data).ok();
+                        if let Err(_e) = ctx.local.ser_buf_producer.enqueue(data) {
+                            defmt::println!("serenq");
+                        }
                     }
                 }
                 Err(_e) => (), //rprintln!("{:?}", e),
@@ -821,7 +821,7 @@ mod app {
 
     #[idle]
     fn idle(_ctx: idle::Context) -> ! {
-        rprintln!("INIT LOOP");
+        defmt::println!("INIT LOOP");
         loop {
             usb_poll::spawn().ok();
             // Don't use this, causes USB not to work.
@@ -857,7 +857,7 @@ mod app {
             if let Some(cmd) = ser_buf.dequeue() {          
                 match cmd {
                     PwmData::SetProgram(program) => {
-                        rprintln!("Switch program to {:?}", program);
+                        defmt::println!("Switch program");
                         *prg = program;
                     }
                     PwmData::RAW(data) => {
