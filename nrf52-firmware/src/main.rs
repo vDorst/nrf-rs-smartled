@@ -110,7 +110,7 @@ impl<'a> Frame {
     }
 
     pub fn copy_from_slice(&mut self, data: &[u8]) -> bool {
-        if data.len() <= self.inner.capacity() {
+        if data.len() <= (self.inner.capacity() - self.inner.len()) {
             for d in data {
                 // SAFETY, we checked capacity.
                 unsafe {
@@ -783,21 +783,28 @@ mod app {
                         },
                         UsbState::WaitForExtraBytes { remaining } => {
                             let mut pf = TMP_FRAME.take().unwrap();
-                            let _ = pf.copy_from_slice(&USB_BUFFER[0..count]);
-                            let remaining = remaining - count as u16;
-                            if remaining == 0 {
-                                // rprintln!("WaitForExtraBytes: Push on Queue");
-                                let ret = PwmData::RAW(pf);
-                                *USB_STATE = UsbState::WaitForCommand;
-                                Some(ret)
+                            if count <= remaining as usize && pf.copy_from_slice(&USB_BUFFER[0..count]) {
+                                let remaining = remaining - count as u16;
+                                if remaining == 0 {
+                                    //rprintln!("WaitForExtraBytes: Push on Queue");
+                                    // defmt::println!("PQ");
+                                    let ret = PwmData::RAW(pf);
+                                    *USB_STATE = UsbState::WaitForCommand;
+                                    Some(ret)
+                                } else {
+                                    // rprintln!(
+                                    //     "WaitForExtraBytes: Got {} Need {} more bytes",
+                                    //     count,
+                                    //     remaining
+                                    // );
+                                    *TMP_FRAME = Some(pf);
+                                    *USB_STATE = UsbState::WaitForExtraBytes { remaining };
+                                    None
+                                }
                             } else {
-                                // rprintln!(
-                                //     "WaitForExtraBytes: Got {} Need {} more bytes",
-                                //     count,
-                                //     remaining
-                                // );
-                                *TMP_FRAME = Some(pf);
-                                *USB_STATE = UsbState::WaitForExtraBytes { remaining };
+                                defmt::println!("BO");
+                                *USB_STATE = UsbState::WaitForCommand;
+                                *TMP_FRAME = None;
                                 None
                             }
                         }
