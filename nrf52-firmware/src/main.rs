@@ -829,9 +829,9 @@ mod app {
         if let Some(pwm) = local_pwm.take() {
             if pwm.is_event_triggered(PwmEvent::SeqEnd(Seq::Seq0)) {
                 pwm.reset_event(PwmEvent::SeqEnd(Seq::Seq0));
-                *local_pwm = Some(pwm);
                 update_pwm::spawn(false).ok();
             }
+            *local_pwm = Some(pwm);
         }
     }
 
