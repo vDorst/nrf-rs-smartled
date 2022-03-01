@@ -428,6 +428,24 @@ mod app {
         let local_pwm = ctx.shared.pwm;
         if let Some(pwm) = local_pwm.take() {
             *local_pwm = match STATE {
+                PwmData::RAW(p) => {
+                    let (buf0, buf1, pwm) = pwm.split();
+                    
+                    let (buf0, start_pwm) = if let Some(buf0) = buf0 {
+                        let next_data = p.pwm_next(buf0);
+                        dp.set_high().unwrap();
+                        if !next_data {
+                            *STATE = PwmData::EMPTY;
+                            dp.set_low().unwrap();
+                        }                        
+                        (Some(buf0), true)
+                    } else {
+                        defmt::println!("NoBUF0");
+                        (None, false)
+                    };
+                    
+                    pwm.load(buf0, buf1, start_pwm).ok()
+                }                
                 PwmData::EMPTY => {
                     dp.set_low().unwrap();
                     pwm.stop();
@@ -447,24 +465,6 @@ mod app {
                         *repeat -= 1;
                     }
                     pwm.load(Some(buf0), buf1, true).ok()
-                }
-                PwmData::RAW(p) => {
-                    let (buf0, buf1, pwm) = pwm.split();
-                    
-                    let (buf0, start_pwm) = if let Some(buf0) = buf0 {
-                        let next_data = p.pwm_next(buf0);
-                        dp.set_high().unwrap();
-                        if !next_data {
-                            *STATE = PwmData::EMPTY;
-                            dp.set_low().unwrap();
-                        }                        
-                        (Some(buf0), true)
-                    } else {
-                        defmt::println!("NoBUF0");
-                        (None, false)
-                    };
-                    
-                    pwm.load(buf0, buf1, start_pwm).ok()
                 }
                 PwmData::SetProgram(_) => Some(pwm),
             };
@@ -834,12 +834,11 @@ mod app {
     
         let local_pwm = ctx.shared.pwm;
 
-        if let Some(pwm) = local_pwm.take() {
+        if let Some(pwm) = local_pwm {
             if pwm.is_event_triggered(PwmEvent::SeqEnd(Seq::Seq0)) {
                 pwm.reset_event(PwmEvent::SeqEnd(Seq::Seq0));
                 update_pwm::spawn(false).ok();
             }
-            *local_pwm = Some(pwm);
         }
     }
 
