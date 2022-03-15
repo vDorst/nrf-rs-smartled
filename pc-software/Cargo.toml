@@ -19,6 +19,7 @@ signal-hook = "0.3"
 oklab = "1.0"
 crossbeam-channel = "0.5"
 crossterm = "0.23"
+rgb = { version = "0.8", feature = "as-bytes" }
 
 
 [profile.dev]
