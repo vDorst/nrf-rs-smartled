@@ -2,12 +2,15 @@
 
 use postcard::{from_bytes_cobs, to_slice_cobs};
 use serde::{Deserialize, Serialize};
+#[cfg(feature="defmt")]
+use defmt::Format;
 
 pub const N_LEDS: usize = 300;
 pub const N_BYTES: usize = 3;
 pub const TOTAL_BYTES: usize = N_LEDS * N_BYTES;
 
 #[derive(PartialEq, Eq, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "defmt", derive(Format))]
 pub enum Responce<'b> {
     Ok,
     Error,
@@ -31,6 +34,7 @@ impl<'a> Responce<'a> {
 
 #[repr(u8)]
 #[derive(PartialEq, Eq, Debug, Copy, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "defmt", derive(Format))]
 pub enum Programs {
     Serial = 0,
     One,
@@ -38,6 +42,7 @@ pub enum Programs {
 }
 
 #[derive(PartialEq, Eq, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "defmt", derive(Format))]
 pub enum Commands<'a> {
     SetProgram(Programs),
     LedData(&'a [u8]),
