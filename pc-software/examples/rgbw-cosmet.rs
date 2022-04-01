@@ -2,7 +2,7 @@ use rand::{self, Rng};
 use std::{thread, time::Duration};
 
 use pc_software::UartLeds;
-use rgb::{self, RGBA8, ComponentBytes};
+use rgb::{self, ComponentBytes, RGBA8};
 
 const N_LEDS: usize = 50;
 
@@ -47,34 +47,108 @@ fn main() -> crossterm::Result<()> {
 
     loop {
         let col = rand::thread_rng().gen_range(0..=COLMAX);
-        
+
         println!("\rCol: {col}");
 
         buf[0] = match col {
-            0 => rgb::RGBA8 { r: 255, g: 0, b: 0, a: 0},
-            1 => rgb::RGBA8 { r: 0, g: 255, b: 0, a: 0 },
-            2 => rgb::RGBA8 { r: 0, g: 0, b: 255, a: 0 },
-            3 => rgb::RGBA8 { r: 0, g: 0, b: 0, a: 0xFF },
-            4 => rgb::RGBA8 { r: 255, g: 255, b: 0, a: 0 },
-            5 => rgb::RGBA8 { r: 255, g: 0, b: 255, a: 0 },
-            6 => rgb::RGBA8 { r: 0, g: 255, b: 255, a: 0 },
-            7 => rgb::RGBA8 { r: 0xAF, g: 255, b: 0xF, a: 0 },
-            8 => rgb::RGBA8 { r: 0, g: 0, b: 0, a: 0xFF },
-            9 => rgb::RGBA8 { r: 0x1F, g: 0xFF, b: 0x1F, a: 0 },
-            10 => rgb::RGBA8 { r: 0, g: 0xFF, b: 0, a: 0xFF },
-            11 => rgb::RGBA8 { r: 0xFF, g: 0, b: 0, a: 0xFF },
-            12 => rgb::RGBA8 { r: 0, g: 0, b: 0xFF, a: 0xFF },
-            13 => rgb::RGBA8 { r: 0xFF, g: 0xFF, b: 0xFF, a: 0xFF },
-            14 => rgb::RGBA8 { r: 0x40, g: 0x40, b: 0x40, a: 0x40 },
+            0 => rgb::RGBA8 {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 0,
+            },
+            1 => rgb::RGBA8 {
+                r: 0,
+                g: 255,
+                b: 0,
+                a: 0,
+            },
+            2 => rgb::RGBA8 {
+                r: 0,
+                g: 0,
+                b: 255,
+                a: 0,
+            },
+            3 => rgb::RGBA8 {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 0xFF,
+            },
+            4 => rgb::RGBA8 {
+                r: 255,
+                g: 255,
+                b: 0,
+                a: 0,
+            },
+            5 => rgb::RGBA8 {
+                r: 255,
+                g: 0,
+                b: 255,
+                a: 0,
+            },
+            6 => rgb::RGBA8 {
+                r: 0,
+                g: 255,
+                b: 255,
+                a: 0,
+            },
+            7 => rgb::RGBA8 {
+                r: 0xAF,
+                g: 255,
+                b: 0xF,
+                a: 0,
+            },
+            8 => rgb::RGBA8 {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 0xFF,
+            },
+            9 => rgb::RGBA8 {
+                r: 0x1F,
+                g: 0xFF,
+                b: 0x1F,
+                a: 0,
+            },
+            10 => rgb::RGBA8 {
+                r: 0,
+                g: 0xFF,
+                b: 0,
+                a: 0xFF,
+            },
+            11 => rgb::RGBA8 {
+                r: 0xFF,
+                g: 0,
+                b: 0,
+                a: 0xFF,
+            },
+            12 => rgb::RGBA8 {
+                r: 0,
+                g: 0,
+                b: 0xFF,
+                a: 0xFF,
+            },
+            13 => rgb::RGBA8 {
+                r: 0xFF,
+                g: 0xFF,
+                b: 0xFF,
+                a: 0xFF,
+            },
+            14 => rgb::RGBA8 {
+                r: 0x40,
+                g: 0x40,
+                b: 0x40,
+                a: 0x40,
+            },
             _ => unreachable!("Error!"),
         };
-
 
         for _ in 0..50 {
             effect(&mut buf[0]);
 
             for i in (1..buf.len()).rev() {
-                buf[i] = buf[i-1];
+                buf[i] = buf[i - 1];
             }
 
             match port.write_bytes(buf.as_bytes()) {
@@ -86,7 +160,7 @@ fn main() -> crossterm::Result<()> {
             }
 
             thread::sleep(Duration::from_millis(40));
-        }    
+        }
     }
 
     let _ = port.restore_program();

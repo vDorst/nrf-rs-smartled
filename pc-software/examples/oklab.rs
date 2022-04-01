@@ -1,11 +1,10 @@
+use oklab::{oklab_to_srgb, srgb_to_oklab, Oklab, RGB};
 use signal_hook::consts::SIGINT;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
 use std::{thread, time::Duration};
-use oklab::{RGB, srgb_to_oklab, oklab_to_srgb, Oklab};
-
 
 use pc_software::UartLeds;
 
@@ -25,7 +24,11 @@ fn main() {
 
     //rand::thread_rng().fill_bytes(&mut buf);
 
-    let mut o= Oklab { l: 0.0, a: 0.0, b: 0.0 };
+    let mut o = Oklab {
+        l: 0.0,
+        a: 0.0,
+        b: 0.0,
+    };
 
     println!("{:?}", o);
 
@@ -36,12 +39,14 @@ fn main() {
             buf[i + 3] = buf[i]
         }
 
-        rad += std::f32::consts::TAU / ( 10 * N_LEDS) as f32;
+        rad += std::f32::consts::TAU / (10 * N_LEDS) as f32;
 
-        if rad >= std::f32::consts::TAU { rad = 0.0; }
+        if rad >= std::f32::consts::TAU {
+            rad = 0.0;
+        }
 
         (o.a, o.b) = rad.sin_cos();
-        
+
         let rgb = oklab_to_srgb(o);
 
         println!("{:.4?} - {:02x?}", o, rgb);
@@ -49,8 +54,6 @@ fn main() {
         buf[0] = rgb.g;
         buf[1] = rgb.r;
         buf[2] = rgb.b;
-
-        
 
         packet_cnt += 1;
 

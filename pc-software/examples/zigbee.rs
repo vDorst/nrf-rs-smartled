@@ -1,13 +1,15 @@
 use crossbeam_channel::bounded;
+
 use crossterm::event::KeyModifiers;
 use crossterm::event::{poll, read, Event, KeyCode::Char, KeyEvent};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use pc_software::UartLeds;
 use rand::{self, Rng};
+use uart_protocol::Commands;
 use std::time::SystemTime;
 use std::{thread, time::Duration};
 
-const N_LEDS: usize = 300;
+const N_LEDS: usize = 64;
 
 fn effect(led: &mut u8) {
     let mut data: u16 = *led as u16;
@@ -29,6 +31,8 @@ fn main() -> crossterm::Result<()> {
     let (s, r) = bounded::<bool>(10);
 
     let id = thread::spawn(move || {
+        let mut ser_buf = [0u8; 1024];
+
         'lus: loop {
             match r.try_recv() {
                 Ok(_) => {
@@ -72,7 +76,9 @@ fn main() -> crossterm::Result<()> {
             effect(&mut buf[900 - 2]);
             effect(&mut buf[900 - 1]);
 
-            match port.write_bytes(buf.as_ref()) {
+            let serdata = Commands::LedData(&buf).to_slice(&mut ser_buf);
+
+            match port.write_bytes(serdata.unwrap()) {
                 Ok(_) => (),
                 Err(e) => {
                     println!("Serial error {:?}", e);
