@@ -44,7 +44,7 @@ use usb_device::{
 };
 use usbd_serial::{self, DefaultBufferStore, SerialPort, USB_CLASS_CDC};
 
-use uart_protocol::{self, Programs, N_BYTES, N_LEDS, TOTAL_BYTES};
+use uart_protocol::{self, Programs, Commands, Responce, N_BYTES, N_LEDS, TOTAL_BYTES};
 
 pool!(FRAMEBUFFER: Deque<u8, TOTAL_BYTES>);
 
@@ -228,16 +228,11 @@ const R: usize = 1;
 const B: usize = 2;
 // const W: usize = 3;
 
-type USBBUS = Usbd<UsbPeripheral<'static>>;
+type UsbBus = Usbd<UsbPeripheral<'static>>;
 
 // PWM (DMA) Sequence memory
 const PWM_DMA_MEM_SIZE: usize = PWM_N_LEDS * N_BYTES * 8 + 1;
 type SeqBuffer = &'static mut [u16; PWM_DMA_MEM_SIZE];
-
-pub enum UsbState {
-    WaitForCommand,
-    WaitForExtraBytes { remaining: u16 },
-}
 
 #[rtic::app(device = crate::hal::pac, peripherals = true, dispatchers = [SWI0_EGU0, SWI1_EGU1])]
 mod app {
@@ -255,8 +250,8 @@ mod app {
 
     #[local]
     struct Local {
-        usb_device: UsbDevice<'static, USBBUS>,
-        usb_serial: SerialPort<'static, USBBUS, DefaultBufferStore, DefaultBufferStore>,
+        usb_device: UsbDevice<'static, UsbBus>,
+        usb_serial: SerialPort<'static, UsbBus, DefaultBufferStore, DefaultBufferStore>,
         led_buf_producer: Producer<'static, PwmData, 4>,
         led_buf_consumer: Consumer<'static, PwmData, 4>,
         ser_buf_producer: Producer<'static, PwmData, 4>,
@@ -268,7 +263,7 @@ mod app {
         update_pin: Pin<Output<PushPull>>,
     }
 
-    #[init(local = [memory: [u8; 4096] = [0; 4096], led_buf: Queue<PwmData, 4> = Queue::new(), ser_buf: Queue<PwmData, 4> = Queue::new(), usbbus: Option<UsbBusAllocator<USBBUS>> = None, clock: Option<hal::clocks::Clocks<ExternalOscillator, Internal, LfOscStopped>> =
+    #[init(local = [memory: [u8; 4096] = [0; 4096], led_buf: Queue<PwmData, 4> = Queue::new(), ser_buf: Queue<PwmData, 4> = Queue::new(), usbbus: Option<UsbBusAllocator<UsbBus>> = None, clock: Option<hal::clocks::Clocks<ExternalOscillator, Internal, LfOscStopped>> =
     None, pwm0_buffer: [u16; PWM_DMA_MEM_SIZE] = [0; PWM_DMA_MEM_SIZE]])]
     fn init(ctx: init::Context) -> (Shared, Local, init::Monotonics) {
         // static mut RADIO: Mutex<RefCell<Option<Radio<'static>>>> = Mutex::new(RefCell::new(None));
@@ -707,111 +702,72 @@ mod app {
     //     });
     // }
 
+    // USB EP has a fixed buffer size.
+    const USB_EP_BUF_SIZE: usize = 64;
+
     //shared = [packet_buf]
-    #[task(local = [usb_serial, usb_device, ser_buf_producer, usb_buffer: [u8; 64] = [0; 64], usb_state : UsbState = UsbState::WaitForCommand, tmp_frame: Option<Frame> = None])]
-    fn usb_poll(ctx: usb_poll::Context) {
-        let USB_BUFFER = ctx.local.usb_buffer;
-        let USB_STATE = ctx.local.usb_state;
-
-        let TMP_FRAME = ctx.local.tmp_frame;
-
+    #[task(shared = [program], local = [usb_serial, usb_device, ser_buf_producer, usb_buffer: [u8; 1024] = [0; 1024], start: usize = 0])]
+    fn usb_poll(mut ctx: usb_poll::Context) {
         let serial = ctx.local.usb_serial;
+
         if ctx.local.usb_device.poll(&mut [serial]) {
-            match serial.read(USB_BUFFER) {
+
+            let USB_BUFFER = ctx.local.usb_buffer;
+            let start = *ctx.local.start;
+            let end = start + USB_EP_BUF_SIZE;
+            let buf_prt = &mut USB_BUFFER[start..end];
+    
+            match serial.read(buf_prt) {
                 Ok(0) => panic!("Can't happen!"),
                 Ok(count) => {
-                    let res: Option<PwmData> = match *USB_STATE {
-                        UsbState::WaitForCommand => match (USB_BUFFER[0], count) {
-                            (0, 2) => {
-                                let prg = Programs::from_bytes(USB_BUFFER[1]);
-                                // defmt::println!("Set Program: {:?}", prg);
-                                Some(PwmData::SetProgram(prg))
-                            }
-                            (1, cnt) => {
-                                // rprint!(
-                                //     "Frame {}: {:x} {:x} {:x} -- ",
-                                //     cnt,
-                                //     USB_BUFFER[0],
-                                //     USB_BUFFER[1],
-                                //     USB_BUFFER[2]
-                                // );
-                                if cnt < 3 {
-                                    // rprintln!(" Drop cnt to low {}", cnt);
-                                    None
-                                } else {
-                                    let send_count: u16 =
-                                        (USB_BUFFER[1] as u16) | ((USB_BUFFER[2] as u16) << 8);
-                                    if send_count > TOTAL_BYTES as u16 || send_count == 0 {
-                                        // rprintln!(" Drop send_count to low {}", send_count);
-                                        None
-                                    } else {
-                                        // rprint!("bytes {};", send_count);
-                                        if let Some(mut pf) = Frame::new() {
-                                            let _ = pf.copy_from_slice(&USB_BUFFER[3..cnt]);
-                                            let bytes_left = send_count - cnt as u16 + 3;
-                                            if bytes_left == 0 {
-                                                // !("Push on queue");
-                                                Some(PwmData::RAW(pf))
-                                            } else {
-                                                // rprintln!(
-                                                //     "Wait for more bytes, Need {} more",
-                                                //     bytes_left
-                                                // );
-                                                *TMP_FRAME = Some(pf);
-                                                *USB_STATE = UsbState::WaitForExtraBytes {
-                                                    remaining: bytes_left,
-                                                };
-                                                None
-                                            }
-                                        } else {
-                                            None
-                                        }
-                                    }
-                                }
-                            }
-                            (_, _) => {
-                                // defmt::println!(
-                                //     "Frame Drop: {:x} {:x} {:x}",
-                                //     USB_BUFFER[0],
-                                //     USB_BUFFER[1],
-                                //     USB_BUFFER[2]
-                                // );
-                                None
-                            }
-                        },
-                        UsbState::WaitForExtraBytes { remaining } => {
-                            let mut pf = TMP_FRAME.take().unwrap();
-                            if count <= remaining as usize && pf.copy_from_slice(&USB_BUFFER[0..count]) {
-                                let remaining = remaining - count as u16;
-                                if remaining == 0 {
-                                    //rprintln!("WaitForExtraBytes: Push on Queue");
-                                    // defmt::println!("PQ");
-                                    let ret = PwmData::RAW(pf);
-                                    *USB_STATE = UsbState::WaitForCommand;
-                                    Some(ret)
-                                } else {
-                                    // rprintln!(
-                                    //     "WaitForExtraBytes: Got {} Need {} more bytes",
-                                    //     count,
-                                    //     remaining
-                                    // );
-                                    *TMP_FRAME = Some(pf);
-                                    *USB_STATE = UsbState::WaitForExtraBytes { remaining };
-                                    None
-                                }
-                            } else {
-                                defmt::println!("BO");
-                                *USB_STATE = UsbState::WaitForCommand;
-                                *TMP_FRAME = None;
-                                None
-                            }
-                        }
-                    };
+                    // defmt::println!("c{}s{}", count, start);
+                    // zero bytes is expected on the end.
+                    let found_zero = buf_prt[count - 1] == 0;
 
-                    if let Some(data) = res {
-                        if let Err(_e) = ctx.local.ser_buf_producer.enqueue(data) {
-                            defmt::println!("serenq");
-                        }
+                    // Invalid data, expect count < USB_EP_BUF_SIZE and no found_zero.
+                    *ctx.local.start = if count != USB_EP_BUF_SIZE && !found_zero { 
+                        defmt::println!("data error");
+                        0
+                    } else if found_zero {
+                        let cmd = Commands::from_bytes(&mut USB_BUFFER[..start+count]);
+
+                        let res: Responce = match cmd {
+                            Some(Commands::LedData(data)) => {
+                                // defmt::println!("Set Led");
+                                if let Some(mut pf) = Frame::new() {
+                                    let _ = pf.copy_from_slice(data);
+                                
+                                    match ctx.local.ser_buf_producer.enqueue(PwmData::RAW(pf)) {
+                                        Ok(_) => Responce::LedAcceptedBufferSpace(1),
+                                        Err(_) => Responce::Error,
+                                    }
+                                } else {
+                                    Responce::BufferFull
+                                }
+                            }
+                            Some(Commands::SetProgram(prg)) => {
+                                defmt::println!("Set PRG {}", prg);
+                                match ctx.local.ser_buf_producer.enqueue(PwmData::SetProgram(prg)) {
+                                    Ok(_) => Responce::Ok,
+                                    Err(_) => Responce::Error,
+                                }                                
+                            }
+                            Some(Commands::GetProgram) => {
+                                defmt::println!("Get PRG");
+                                ctx.shared.program.lock( |prg| {
+                                    Responce::Program(*prg)
+                                })
+                            }
+                            _ => Responce::Error,
+                        };
+
+                        let ser_res = res.to_slice(&mut USB_BUFFER[..]).unwrap();
+                        let _ = serial.write(ser_res);
+                        0
+                    } else if start + USB_EP_BUF_SIZE >=USB_BUFFER.len() {
+                        0
+                    } else {
+                        start + USB_EP_BUF_SIZE
                     }
                 }
                 Err(_e) => (), //rprintln!("{:?}", e),
@@ -855,10 +811,6 @@ mod app {
         ctx.shared.program.lock(|prg| {      
             if let Some(cmd) = ser_buf.dequeue() {          
                 match cmd {
-                    PwmData::SetProgram(program) => {
-                        defmt::println!("Switch program");
-                        *prg = program;
-                    }
                     PwmData::RAW(data) => {
                         if *prg == uart_protocol::Programs::Serial {
                             *timeout = 500;
@@ -866,6 +818,10 @@ mod app {
                         } else {
                             drop(data);
                         };
+                    }
+                    PwmData::SetProgram(program) => {
+                        defmt::println!("Switch program");
+                        *prg = program;
                     }
                     _e => (),
                 }
