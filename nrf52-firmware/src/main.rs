@@ -18,10 +18,13 @@ use embedded_hal::digital::v2::OutputPin;
 
 use nrf52840_hal as hal;
 
+mod ieee802154;
+
+use ieee802154::{Channel, Packet, Radio, RadioReturn};
+
 use hal::{
     clocks::{ExternalOscillator, Internal, LfOscStopped},
     gpio::{Level, Output, Pin, PushPull},
-    // ieee802154::{Channel, Packet, Radio},
     pac::PWM0,
     //pac::PWM0, TIMER1,
     pwm::{self, LoadMode, Prescaler, Pwm, PwmEvent, PwmSeq, Seq},
@@ -42,6 +45,7 @@ use usb_device::{
     class_prelude::UsbBusAllocator,
     device::{UsbDevice, UsbDeviceBuilder, UsbVidPid},
 };
+
 use usbd_serial::{self, DefaultBufferStore, SerialPort, USB_CLASS_CDC};
 
 use uart_protocol::{self, Programs, Commands, Responce, N_BYTES, N_LEDS, TOTAL_BYTES};
@@ -176,6 +180,12 @@ impl<'a> Frame {
 //     }
 // }
 
+pub enum RadioAction {
+    Disabled,
+    RxMode,
+    Tx(Packet),
+}
+
 // #[derive(PartialEq, Eq)]
 pub enum PwmData {
     SINGLE { repeat: u16, data: Led },
@@ -234,7 +244,7 @@ type UsbBus = Usbd<UsbPeripheral<'static>>;
 const PWM_DMA_MEM_SIZE: usize = PWM_N_LEDS * N_BYTES * 8 + 1;
 type SeqBuffer = &'static mut [u16; PWM_DMA_MEM_SIZE];
 
-#[rtic::app(device = crate::hal::pac, peripherals = true, dispatchers = [SWI0_EGU0, SWI1_EGU1])]
+#[rtic::app(device = crate::hal::pac, peripherals = true, dispatchers = [SWI0_EGU0, SWI1_EGU1, SWI2_EGU2, SWI3_EGU3])]
 mod app {
     use super::*;
 
@@ -244,7 +254,8 @@ mod app {
         #[lock_free]
         pwm: Option<PwmSeq<PWM0, SeqBuffer, SeqBuffer>>,
         // tmr1: Timer<TIMER1>,
-        // zigbee: &'static Mutex<RefCell<Option<Radio<'static>>>>,
+        #[lock_free]
+        radio: Option<Radio<'static>>,
         program: uart_protocol::Programs,
     }
 
@@ -256,6 +267,8 @@ mod app {
         led_buf_consumer: Consumer<'static, PwmData, 4>,
         ser_buf_producer: Producer<'static, PwmData, 4>,
         ser_buf_consumer: Consumer<'static, PwmData, 4>,
+        // rxrf_buf_producer: Producer<'static, Packet, 4>,
+        rxrf_buf_consumer: Consumer<'static, RadioReturn, 4>,
         tmr0: StopWatch,
         led_gr: Pin<Output<PushPull>>,
         // `_led_bl: Pin<Output<PushPull>>,
@@ -263,11 +276,9 @@ mod app {
         update_pin: Pin<Output<PushPull>>,
     }
 
-    #[init(local = [memory: [u8; 4096] = [0; 4096], led_buf: Queue<PwmData, 4> = Queue::new(), ser_buf: Queue<PwmData, 4> = Queue::new(), usbbus: Option<UsbBusAllocator<UsbBus>> = None, clock: Option<hal::clocks::Clocks<ExternalOscillator, Internal, LfOscStopped>> =
-    None, pwm0_buffer: [u16; PWM_DMA_MEM_SIZE] = [0; PWM_DMA_MEM_SIZE]])]
+    #[init(local = [memory: [u8; 4096] = [0; 4096], rxrf_buf: Queue<Packet, 4> = Queue::new(), led_buf: Queue<PwmData, 4> = Queue::new(), ser_buf: Queue<PwmData, 4> = Queue::new(), radio_buf: Queue<ieee802154::RadioReturn, 4> = Queue::new(), usbbus: Option<UsbBusAllocator<UsbBus>> = None, clock: Option<hal::clocks::Clocks<ExternalOscillator, Internal, LfOscStopped>> =
+    None, pwm0_buffer: [u16; PWM_DMA_MEM_SIZE] = [0; PWM_DMA_MEM_SIZE], packet_buf: Packet = Packet::new()])]
     fn init(ctx: init::Context) -> (Shared, Local, init::Monotonics) {
-        // static mut RADIO: Mutex<RefCell<Option<Radio<'static>>>> = Mutex::new(RefCell::new(None));
-
         let pos = FRAMEBUFFER::grow(ctx.local.memory);
 
         assert_eq!(pos, 4);
@@ -326,10 +337,13 @@ mod app {
             .max_packet_size_0(64) // (makes control transfers 8x faster)
             .build();
 
-        // let mut radio = Radio::init(ctx.device.RADIO, &clock);
-        // radio.set_channel(Channel::_15);
 
-        // cortex_m::interrupt::free(|cs| unsafe { RADIO.borrow(cs).replace(Some(radio))} );
+        // INIT RADIO
+        let (radio_tx, radio_rx) = ctx.local.radio_buf.split();
+        let mut radio = Radio::init(ctx.device.RADIO, &clock, radio_tx, ctx.local.packet_buf);
+        radio.set_channel(Channel::_15);
+
+        radio_handler::spawn( RadioAction::RxMode );
 
         green_led.set_low().unwrap();
         red_led.set_high().unwrap();
@@ -344,8 +358,6 @@ mod app {
             .set_max_duty(PWM_MAX)
             .set_prescaler(Prescaler::Div1);
 
-        // let mut PATTERN_BUF = ringbuffer::ConstGenericRingBuffer::new();
-        // let PACKET_BUF = ringbuffer::ConstGenericRingBuffer::new();
 
         let (mut led_buf_producer, led_buf_consumer) = ctx.local.led_buf.split();
 
@@ -376,13 +388,14 @@ mod app {
         tmr0.start();
 
         let (ser_buf_producer, ser_buf_consumer) = ctx.local.ser_buf.split();
+        // let (rxrf_buf_producer, rxrf_buf_consumer) = ctx.local.rxrf_buf.split();
 
         (
             Shared {
                 // packet_buf: PACKET_BUF,
                 pwm,
                 // tmr1,
-                // zigbee: unsafe { RADIO.as_ref() },
+                radio: Some(radio),
                 program: uart_protocol::Programs::Two,
             },
             Local {
@@ -390,6 +403,8 @@ mod app {
                 led_buf_producer,
                 ser_buf_consumer,
                 ser_buf_producer,
+                // rxrf_buf_producer,
+                rxrf_buf_consumer: radio_rx,
                 usb_device,
                 usb_serial,
                 led_gr: green_led,
@@ -689,34 +704,21 @@ mod app {
         }
     }
 
-    // #[task(binds=RADIO, shared = [packet_buf, zigbee, tmr1])]
-    // fn recv_packet(ctx: recv_packet::Context) {
-    //     cortex_m::interrupt::free(|cs| {
-    //         if let Some(zigbee) = ctx.shared.zigbee.borrow(cs).borrow_mut().as_mut() {
-    //             let mut zp = Packet::new();
-    //             let packet = zigbee.recv(&mut zp);
-    //             if let Ok(_data) = packet {
-    //                 ctx.shared.packet_buf.push(zp);
-    //             }
-    //         }
-    //     });
-    // }
-
     // USB EP has a fixed buffer size.
     const USB_EP_BUF_SIZE: usize = 64;
 
     //shared = [packet_buf]
-    #[task(shared = [program], local = [usb_serial, usb_device, ser_buf_producer, usb_buffer: [u8; 1024] = [0; 1024], start: usize = 0])]
+    #[task(shared = [program], local = [usb_serial, usb_device, ser_buf_producer, rxrf_buf_consumer, usb_buffer: [u8; 1024] = [0; 1024], usb_write: [u8; 256] = [0; 256], start: usize = 0])]
     fn usb_poll(mut ctx: usb_poll::Context) {
         let serial = ctx.local.usb_serial;
 
-        if ctx.local.usb_device.poll(&mut [serial]) {
 
-            let USB_BUFFER = ctx.local.usb_buffer;
-            let start = *ctx.local.start;
-            let end = start + USB_EP_BUF_SIZE;
-            let buf_prt = &mut USB_BUFFER[start..end];
-    
+        if ctx.local.usb_device.poll(&mut [serial]) {
+                let USB_BUFFER = ctx.local.usb_buffer;
+                let start = *ctx.local.start;
+                let end = start + USB_EP_BUF_SIZE;
+                let buf_prt = &mut USB_BUFFER[start..end];
+
             match serial.read(buf_prt) {
                 Ok(0) => panic!("Can't happen!"),
                 Ok(count) => {
@@ -773,6 +775,16 @@ mod app {
                 Err(_e) => (), //rprintln!("{:?}", e),
             }
         }
+
+        // Write data
+        if let Some(pkt) = ctx.local.rxrf_buf_consumer.dequeue() {                
+            let mut tb = [0; 144];
+            let slice = pkt.to_slice(&mut tb);
+            let res = Responce::RadioRecv(&slice);
+            let ser_res = res.to_slice(&mut ctx.local.usb_write[..]).unwrap();
+            // defmt::println!("TX COBS {}", ser_res);
+            let _ = serial.write(ser_res);
+        }
     }
 
     #[idle]
@@ -785,12 +797,29 @@ mod app {
         }
     }
 
-    #[task(priority = 3, binds = PWM0, shared = [pwm])]
-    fn PWM0_handler(ctx: PWM0_handler::Context) {
-    
-        let local_pwm = ctx.shared.pwm;
+    #[task(priority = 2, shared = [radio])]
+    fn radio_handler(ctx: radio_handler::Context, action: RadioAction) {
+        defmt::println!("RADIO");
 
-        if let Some(pwm) = local_pwm {
+        if let Some(mut radio) = ctx.shared.radio.take() {
+            radio.action(action);
+
+            *ctx.shared.radio = Some(radio);            
+        }
+    }
+
+    #[task(priority = 2, binds=RADIO, shared = [radio])]
+    fn RADIO_handler(ctx: RADIO_handler::Context) {
+        if let Some(mut radio) = ctx.shared.radio.take() {
+            radio.handle_interrupt();
+            
+            *ctx.shared.radio = Some(radio);
+        }
+    }
+
+    #[task(priority = 3, binds = PWM0, shared = [pwm])]
+    fn PWM0_handler(ctx: PWM0_handler::Context) { 
+        if let Some(pwm) = ctx.shared.pwm {
             if pwm.is_event_triggered(PwmEvent::SeqEnd(Seq::Seq0)) {
                 pwm.reset_event(PwmEvent::SeqEnd(Seq::Seq0));
                 update_pwm::spawn(false).ok();

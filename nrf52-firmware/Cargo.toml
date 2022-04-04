@@ -22,6 +22,8 @@ uart-protocol = { path = "../uart-protocol", features = ["defmt"]}
 defmt = { version = "0.3" }
 defmt-rtt =  { version = "0.3" }
 panic-probe = { version = "0.3.0", features = ["print-defmt"] }
+postcard = "0.7"
+serde = { version = "1.0", default-features = false }
 
 [dependencies.embedded-hal]
 version = "0.2.6"
