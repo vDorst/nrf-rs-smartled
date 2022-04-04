@@ -5,9 +5,9 @@ use crossterm::event::{poll, read, Event, KeyCode::Char, KeyEvent};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use pc_software::UartLeds;
 use rand::{self, Rng};
-use uart_protocol::Commands;
 use std::time::SystemTime;
 use std::{thread, time::Duration};
+use uart_protocol::Commands;
 
 const N_LEDS: usize = 64;
 

@@ -46,7 +46,7 @@ fn dim(led: &mut RGBA8, bright: usize) {
 
 fn main() -> crossterm::Result<()> {
     let mut port = UartLeds::new("/dev/ttyACM0").unwrap();
-    
+
     // Clear all leds
     let buf: [rgb::RGBA8; 150] = [rgb::RGBA8::default(); 150];
 

@@ -1,13 +1,16 @@
 use rand::{self, Rng};
-use uart_protocol::Commands;
 use std::{thread, time::Duration};
+use uart_protocol::Commands;
 
-use crossterm::{event::{
-    read, Event,
-    KeyCode::{self, Char},
-    KeyEvent, KeyModifiers,
-}, Command};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use crossterm::{
+    event::{
+        read, Event,
+        KeyCode::{self, Char},
+        KeyEvent, KeyModifiers,
+    },
+    Command,
+};
 
 use pc_software::UartLeds;
 use rgb::{self, ComponentBytes, RGB8};
@@ -45,7 +48,7 @@ fn dim(led: &mut RGB8, bright: usize) {
 
 fn main() -> crossterm::Result<()> {
     let mut port = UartLeds::new("/dev/ttyACM0").unwrap();
-    
+
     // Clear all leds
     let buf: [RGB8; 150] = [RGB8::default(); 150];
 
@@ -119,26 +122,10 @@ fn main() -> crossterm::Result<()> {
             ret
         } else {
             buf[0] = match col {
-                0 => RGB8 {
-                    r: 255,
-                    g: 0,
-                    b: 0,
-                },
-                1 => RGB8 {
-                    r: 0,
-                    g: 255,
-                    b: 0,
-                },
-                2 => RGB8 {
-                    r: 0,
-                    g: 0,
-                    b: 255,
-                },
-                3 => RGB8 {
-                    r: 0,
-                    g: 0,
-                    b: 0,
-                },
+                0 => RGB8 { r: 255, g: 0, b: 0 },
+                1 => RGB8 { r: 0, g: 255, b: 0 },
+                2 => RGB8 { r: 0, g: 0, b: 255 },
+                3 => RGB8 { r: 0, g: 0, b: 0 },
                 4 => RGB8 {
                     r: 0xFF,
                     g: 0xFF,
@@ -208,7 +195,7 @@ fn main() -> crossterm::Result<()> {
 
             // Swap R and G, we are using WS2812 GRBW leds.
             {
-                let RGB8 { r, g, b: _} = &mut buf[0];
+                let RGB8 { r, g, b: _ } = &mut buf[0];
                 (*r, *g) = (*g, *r);
             }
 
