@@ -1,6 +1,6 @@
 use serialport::{self, SerialPort};
-use uart_protocol::{Commands, Responce};
 pub use uart_protocol::Programs;
+use uart_protocol::{Commands, Responce};
 
 use std::{
     io::{Error, ErrorKind},
@@ -72,12 +72,10 @@ impl UartLeds {
     pub fn read_responce(&mut self) -> Result<Responce, Error> {
         match self.ser_dev.read(self.ser_buf.as_mut()) {
             Ok(0) => Err(Error::new(ErrorKind::BrokenPipe, "Serial port gone!")),
-            Ok(count) => {
-                match Responce::from_bytes(&mut self.ser_buf[..count]) {
-                    Some(r) => Ok(r),
-                    None => Err(Error::new(ErrorKind::Other, "Responce::from_bytes")),
-                }
-            }
+            Ok(count) => match Responce::from_bytes(&mut self.ser_buf[..count]) {
+                Some(r) => Ok(r),
+                None => Err(Error::new(ErrorKind::Other, "Responce::from_bytes")),
+            },
             Err(e) => Err(e),
         }
     }
