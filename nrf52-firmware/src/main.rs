@@ -184,6 +184,7 @@ pub enum RadioAction {
     Disabled,
     RxMode,
     Tx(Packet),
+    Channel(u8),
 }
 
 // #[derive(PartialEq, Eq)]
@@ -338,10 +339,16 @@ mod app {
             .build();
 
 
+        defmt::println!("INIT1: {=u32}", ctx.local.packet_buf.as_ptr() as u32);
+
         // INIT RADIO
         let (radio_tx, radio_rx) = ctx.local.radio_buf.split();
         let mut radio = Radio::init(ctx.device.RADIO, &clock, radio_tx, ctx.local.packet_buf);
         radio.set_channel(Channel::_15);
+        radio.set_txpower(ieee802154::TxPower::Pos8dBm);
+        let mut  p = Packet::new();
+        p.copy_from_slice(&[3, 8, 0xAA, 255, 255, 255, 255, 7]);
+        radio.send(&mut p);
 
         radio_handler::spawn( RadioAction::RxMode );
 
@@ -759,6 +766,16 @@ mod app {
                                 ctx.shared.program.lock( |prg| {
                                     Responce::Program(*prg)
                                 })
+                            }
+                            Some(Commands::RadioChannel(c)) => if radio_handler::spawn(RadioAction::Channel(c)).is_ok() { Responce::Ok } else { Responce::Reject },
+                            Some(Commands::RadioSend(d)) => {
+                                let mut p = Packet::new();
+                                p.copy_from_slice(&d[..]);
+                                if radio_handler::spawn(RadioAction::Tx(p)).is_ok() {
+                                    Responce::RadioAcceptedBufferSpace(1)
+                                } else {
+                                    Responce::Error
+                                }
                             }
                             _ => Responce::Error,
                         };

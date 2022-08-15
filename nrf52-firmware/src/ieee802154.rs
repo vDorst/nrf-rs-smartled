@@ -208,6 +208,8 @@ impl<'c> Radio<'c> {
     /// Initializes the radio for IEEE 802.15.4 operation
     pub fn init<L, LSTAT>(radio: RADIO, _clocks: &'c Clocks<ExternalOscillator, L, LSTAT>, tx: Producer<'c, RadioReturn, 4>, buffer: &'c mut Packet) -> Self {
 
+        defmt::println!("INIT2: {=u32}", buffer.as_ptr() as u32);
+
         let mut radio = Self {
             needs_enable: false,
             radio,
@@ -273,10 +275,10 @@ impl<'c> Radio<'c> {
         }
 
         // set default settings
-        radio.set_channel(DEFAULT_CHANNEL);
+        radio.set_channel(Channel::_15);
         radio.set_cca(DEFAULT_CCA);
         radio.set_sfd(DEFAULT_SFD);
-        radio.set_txpower(DEFAULT_TXPOWER);
+        radio.set_txpower(TxPower::Pos8dBm);
 
         radio
     }
@@ -556,7 +558,7 @@ impl<'c> Radio<'c> {
     /// ensure the `packet` buffer is allocated in RAM, which is required by the RADIO peripheral
     // NOTE we do NOT check the address of `packet` because the mutable reference ensures it's
     // allocated in RAM
-    pub fn send(&mut self, packet: &mut Packet) {
+    pub fn send(&mut self, packet: &Packet) {
         // enable radio to perform cca
         self.put_in_rx_mode();
 
@@ -574,24 +576,36 @@ impl<'c> Radio<'c> {
                 .set_bit()
         });
 
+        *self.buffer = packet.clone();
+
         // the DMA transfer will start at some point after the following write operation so
         // we place the compiler fence here
         dma_start_fence();
-        // NOTE(unsafe) DMA transfer has not yet started
+
+        let packet_ptr = self.buffer.buffer.as_mut_ptr() as u32;
+
         unsafe {
             self.radio
                 .packetptr
-                .write(|w| w.packetptr().bits(packet.buffer.as_ptr() as u32));
+                .write(|w| w.packetptr().bits(packet_ptr));
         }
 
+        // Disable interupt
+        self.radio.intenclr.write(|w| w.phyend().set_bit());
+        self.radio.events_ccabusy.reset();
+        self.radio.events_phyend.reset();
+
+        let mut timeout = 1000;
+
         'cca: loop {
+            defmt::println!("CCA");
             // start CCA (+ sending if channel is clear)
             self.radio
                 .tasks_ccastart
                 .write(|w| w.tasks_ccastart().set_bit());
 
             loop {
-                if self.radio.events_phyend.read().events_phyend().bit_is_set() {
+                if timeout == 0 || self.radio.events_phyend.read().events_phyend().bit_is_set() {
                     dma_end_fence();
                     // transmission is complete
                     self.radio.events_phyend.reset();
@@ -609,6 +623,7 @@ impl<'c> Radio<'c> {
                     self.radio.events_ccabusy.reset();
                     continue 'cca;
                 }
+                timeout -= 1;
             }
         }
 
@@ -623,29 +638,43 @@ impl<'c> Radio<'c> {
     /// ensure the `packet` buffer is allocated in RAM, which is required by the RADIO peripheral
     // NOTE we do NOT check the address of `packet` because the mutable reference ensures it's
     // allocated in RAM
-    pub fn send_no_cca(&mut self, packet: &mut Packet) {
+    pub fn send_no_cca(&mut self, packet: &Packet) {
+
         self.put_in_tx_mode();
 
         // clear related events
         self.radio.events_phyend.reset();
         self.radio.events_end.reset();
+        self.radio.shorts.reset();
 
-        // NOTE(unsafe) DMA transfer has not yet started
+        *self.buffer = packet.clone();
+
+        // start DMA transfer
+        dma_start_fence();
+
+        // the DMA transfer will start at some point after the following write operation so
+        // we place the compiler fence here
+        let packet_ptr = self.buffer.buffer.as_mut_ptr() as u32;
+
         unsafe {
             self.radio
                 .packetptr
-                .write(|w| w.packetptr().bits(packet.buffer.as_ptr() as u32));
+                .write(|w| w.packetptr().bits(packet_ptr));
         }
+
+        // Enable interupt
+        self.radio.intenset.write(|w| w.txready().set_bit());
 
         // configure radio to disable transmitter once packet is sent
         self.radio.shorts.modify(|_, w| w.end_disable().set_bit());
 
-        // start DMA transfer
-        dma_start_fence();
+
         self.radio.tasks_start.write(|w| w.tasks_start().set_bit());
 
-        self.wait_for_event(Event::PhyEnd);
-        self.radio.shorts.reset();
+        self.state = RadioWant::TX;
+        //
+        // self.wait_for_event(Event::PhyEnd);
+        // self.radio.shorts.reset();
     }
 
     /// Moves the radio from any state to the DISABLED state
@@ -698,9 +727,7 @@ impl<'c> Radio<'c> {
         };
 
         if disable {
-            self.radio
-                .tasks_disable
-                .write(|w| w.tasks_disable().set_bit());
+            self.radio.tasks_disable.write(|w| w.tasks_disable().set_bit());
             self.wait_for_state_a(STATE_A::DISABLED);
         }
 
@@ -709,6 +736,7 @@ impl<'c> Radio<'c> {
             self.radio.tasks_rxen.write(|w| w.tasks_rxen().set_bit());
             self.wait_for_state_a(STATE_A::RXIDLE);
         }
+        defmt::println!("RX Mode!");
     }
 
     /// Moves the radio to the TXIDLE state
@@ -719,6 +747,7 @@ impl<'c> Radio<'c> {
             self.needs_enable = false;
             self.radio.tasks_txen.write(|w| w.tasks_txen().set_bit());
             self.wait_for_state_a(STATE_A::TXIDLE);
+            defmt::println!("TX Mode!");
         }
     }
 
@@ -734,8 +763,11 @@ impl<'c> Radio<'c> {
                 self.wait_for_state_a(STATE_A::DISABLED);
                 State::Disabled
             }
-
-            _ => unreachable!(),
+            STATE_A::TX => State::TxIdle,
+            STATE_A::RX => State::RxIdle,
+            STATE_A::RXRU => State::RxIdle,
+            STATE_A::RXDISABLE => State::RxIdle,
+            STATE_A::TXRU => State::RxIdle,            
         }
     }
 
@@ -779,20 +811,44 @@ impl<'c> Radio<'c> {
 
                 state
             }
-            RadioAction::Tx(_) => RadioWant::TX,
+            RadioAction::Tx(p) => {
+                defmt::println!("Radio Send {}", p.len());
+                self.send(&p);
+                RadioWant::TX
+            },
+            RadioAction::Channel(chn) => {
+                let channel = match chn {
+                    11 => Channel::_11,
+                    15 => Channel::_15,
+                    20 => Channel::_20,
+                    25 => Channel::_25,
+                    _ => Channel::_15,
+                };
+                self.set_channel(channel);
+                return;
+            }
         };
         self.state = want_state;
     }
 
     /// Handle intterupt
     pub fn handle_interrupt(&mut self) {
-        defmt::println!("Radio:");        
-        if self.radio.events_end.read().events_end().bit_is_set() {
+        let event = self.radio.events_end.read();
+        defmt::println!("RINT: {=u32}", event.bits());
+        if event.events_end().bit_is_set() {
             self.radio.events_end.reset();
             dma_end_fence();
             match self.state {
                 RadioWant::Disabled => todo!(),
-                RadioWant::TX => todo!(),
+                RadioWant::TX => {
+                    defmt::println!("\tTX");
+                    self.radio.shorts.reset();
+
+                    defmt::println!("Radio RXSwitch");
+                    // unsafe { self.start_recv(); }                    
+
+                    self.state = RadioWant::RX;
+                },
                 RadioWant::RX => {
                     defmt::println!("\tRX");
                     let crc = self.radio.rxcrc.read().rxcrc().bits() as u16;
@@ -818,7 +874,22 @@ impl<'c> Radio<'c> {
         }
         if self.radio.events_rxready.read().events_rxready().bit_is_set() {
             self.radio.events_rxready.reset();
-            defmt::println!("\tReady");
+            defmt::println!("\tRX Ready");
+
+            self.radio.shorts.reset();
+        }
+        if self.radio.events_txready.read().events_txready().bit_is_set() {
+            self.radio.events_txready.reset();
+            defmt::println!("\tTX Ready");
+
+            dma_end_fence();
+            self.radio.events_phyend.reset();
+            self.radio.shorts.reset();
+
+            defmt::println!("Radio RXSwitch");
+            unsafe { self.start_recv(); }                    
+
+            self.state = RadioWant::RX;
         }
     }
 }

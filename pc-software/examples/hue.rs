@@ -16,7 +16,7 @@ fn main() {
 
     let mut buf = [01u8; N_LEDS * 3];
 
-    let mut port = UartLeds::new("/dev/ttyACM0").unwrap();
+    let mut port = UartLeds::new("/dev/ttyACM1").unwrap();
 
     let time_delay = Duration::from_millis(22);
 

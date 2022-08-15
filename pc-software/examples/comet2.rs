@@ -24,7 +24,7 @@ fn main() {
 
     let mut buf = [0x01; BUF_LEN];
 
-    let mut port = UartLeds::new("/dev/ttyACM0").unwrap();
+    let mut port = UartLeds::new("/dev/ttyACM1").unwrap();
 
     let time_delay = Duration::from_millis(30);
 

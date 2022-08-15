@@ -1,3 +1,5 @@
+#![deny(clippy::pedantic)]
+
 use crossbeam_channel::bounded;
 use crossterm::event::KeyModifiers;
 use crossterm::event::{poll, read, Event, KeyCode::Char, KeyEvent};
@@ -7,12 +9,42 @@ use rand::{self, Rng};
 use std::time::SystemTime;
 use std::{thread, time::Duration};
 
-const N_LEDS: usize = 300;
 
+const N_X: usize = 8;
+const N_Y: usize = 8;
+
+const N_LEDS: usize = N_X * N_Y;
+
+
+const PATTERN: &[u8; 73] = &[ 
+    28, 36, 35, 27, 19, 20, 21, 29, 
+    37, 45, 44, 43, 42, 34, 26, 18, 
+    10, 11, 12, 13, 14, 22, 30, 38, 
+    46, 54, 53, 52, 51, 50, 49, 41, 
+    33, 25, 17,  9,  1,  2,  3,  4,
+     5,  6,  7, 15, 23, 31, 39, 47,
+    55, 63, 62, 61, 60, 59, 58, 57,
+    56, 48, 40, 32, 24, 16,  8,  0,
+     1,  2,  3,  4,  5,  6,  7, 14,
+    21];
+
+
+// y: x 0  1  2  3  4  5  6  7
+// -|-------------------------
+// 0:   0  1  2  3  4  5  6  7
+// 1:   8  9 10 11 12 13 14 15
+// 2:  16 17 18 19 20 21 22 23
+// 3:  24 25 26 27[28]29 30 31
+// 4:  32 33 34 35 36 37 38 39
+// 5:  40 41 42 43 44 45 46 47
+// 6:  48 49 50 51 52 53 54 55
+// 7:  56 57 58 59 60 61 62 63
+
+#[allow(clippy::cast_possible_truncation)]
 fn effect(led: &mut u8) {
-    let mut data: u16 = *led as u16;
-    data *= 6;
-    data >>= 3;
+    let mut data: u16 = u16::from(*led);
+    data *= 14;
+    data >>= 4;
     *led = data as u8;
 }
 
@@ -20,68 +52,58 @@ fn main() -> crossterm::Result<()> {
     let mut buf = [0u8; N_LEDS * 3];
 
     let mut port = UartLeds::new("/dev/ttyACM1").unwrap();
-    let time_delay = Duration::from_millis(25);
-
-    // let time_delay_update = Duration::from_millis(2000);
-
-    //rand::thread_rng().fill_bytes(&mut buf);
+    let time_delay = Duration::from_millis(2000/64);
 
     let (s, r) = bounded::<bool>(10);
 
+    let mut pixel = &[255, 0, 0];
+
     let id = thread::spawn(move || {
         'lus: loop {
-            match r.try_recv() {
-                Ok(_) => {
-                    let col: u8 = rand::thread_rng().gen_range(0..=8);
-                    // buf[1] = 0xAF;
-                    // buf[0] = 0xFF;
-                    // buf[2] = 0x0F;
 
-                    let pixel = match col {
-                        0 => &[255, 0, 0],
-                        1 => &[0, 255, 0],
-                        2 => &[0, 0, 255],
-                        3 => &[255, 255, 0],
-                        4 => &[255, 0, 255],
-                        5 => &[0, 255, 255],
-                        6 => &[0xAF, 255, 0xF],
-                        7 => &[0xFF, 0xFF, 0xFF],
-                        8 => &[0x1F, 0xFF, 0x1F],
-                        _ => unreachable!("Error!"),
-                    };
+            for &loc in PATTERN {
 
-                    buf[0..=2].copy_from_slice(pixel);
-                    buf[900 - 3..900].copy_from_slice(pixel);
+                for d in buf.iter_mut() {
+                    effect(d);
                 }
-                Err(crossbeam_channel::TryRecvError::Disconnected) => break 'lus,
-                Err(crossbeam_channel::TryRecvError::Empty) => (),
-            }
 
-            for i in (0..450 - 3).rev() {
-                buf[i + 3] = buf[i]
-            }
-            for i in 450..900 - 3 {
-                buf[i] = buf[i + 3]
-            }
+                let pos = usize::from(loc) * 3;
 
-            effect(&mut buf[0]);
-            effect(&mut buf[1]);
-            effect(&mut buf[2]);
 
-            effect(&mut buf[900 - 3]);
-            effect(&mut buf[900 - 2]);
-            effect(&mut buf[900 - 1]);
+                match r.try_recv() {
+                    Ok(_) => {
+                        let col: u8 = rand::thread_rng().gen_range(0..=8);
 
-            match port.write_bytes(buf.as_ref()) {
-                Ok(_) => (),
-                Err(e) => {
-                    println!("Serial error {:?}", e);
-                    break 'lus;
+                        pixel = match col {
+                            0 => &[255, 0, 0],
+                            1 => &[0, 255, 0],
+                            2 => &[0, 0, 255],
+                            3 => &[255, 255, 0],
+                            4 => &[255, 0, 255],
+                            5 => &[0, 255, 255],
+                            6 => &[0xAF, 255, 0xF],
+                            7 => &[0xFF, 0xFF, 0xFF],
+                            8 => &[0x1F, 0xFF, 0x1F],
+                            _ => unreachable!("Error!"),
+                        };
+                    }
+                    Err(crossbeam_channel::TryRecvError::Disconnected) => break 'lus,
+                    Err(crossbeam_channel::TryRecvError::Empty) => (),
                 }
+
+                buf[pos..pos+3].copy_from_slice(pixel);
+
+                match port.write_bytes(buf.as_ref()) {
+                    Ok(_) => (),
+                    Err(e) => {
+                        println!("Serial error {:?}", e);
+                        break 'lus;
+                    }
+                }
+                thread::sleep(time_delay);
             }
-            thread::sleep(time_delay);
         }
-        let _ = port.restore_program();
+        let _e = port.restore_program();
     });
 
     enable_raw_mode()?;
@@ -145,7 +167,7 @@ fn main() -> crossterm::Result<()> {
 
     drop(s);
 
-    let _ = id.join();
+    let _e = id.join();
 
     Ok(())
 }

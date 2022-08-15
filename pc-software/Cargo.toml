@@ -11,7 +11,7 @@ edition = "2021"
 serialport = "4.0"
 image = "0.24"
 font8x8 = { version = "0.3", default-features = false }
-pico-args = "0.4.2"
+pico-args = "0.5"
 rand = "0.8"
 colorsys = "0.6.5"
 uart-protocol = { path = "../uart-protocol"}
@@ -23,7 +23,10 @@ rgb = { version = "0.8", feature = "as-bytes" }
 ieee802154 = "0.6.0"
 byte = "0.2.6"
 psila-data = { path = "../../psila/psila-data/" }
-
+psila-service = { path = "../../psila/psila-service/" }
+psila-crypto-rust-crypto = { path = "../../psila/psila-crypto-rust-crypto/" }
+psila-crypto = { path = "../../psila/psila-crypto/" }
+bbqueue = "0.5"
 
 [profile.dev]
 incremental = false

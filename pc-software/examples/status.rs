@@ -1,23 +1,35 @@
 use crossbeam_channel::bounded;
 
-use byte::BytesExt;
+//use byte::BytesExt;
 use crossterm::event::KeyModifiers;
 use crossterm::event::{poll, read, Event, KeyCode::Char, KeyEvent};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-use ieee802154::mac::{
-    Address, FooterMode, Frame, FrameSerDesContext, FrameType, PanId, ShortAddress,
-};
+// use ieee802154::mac::{
+//     Address, FooterMode, Frame, FrameSerDesContext, FrameType, PanId, ShortAddress,
+// };
 use image::EncodableLayout;
 use pc_software::UartLeds;
-use psila_data::application_service::ApplicationServiceHeader;
-use psila_data::pack::Pack;
+use psila_data::{ExtendedAddress, Key};
+//use psila_data::application_service::header::FrameControl;
+use psila_data::application_service::{ApplicationServiceHeader};
+use psila_data::cluster_library::{AttributeDataType};
+//use psila_data::pack::Pack;
+//use psila_data::security::CryptoProvider;
+use psila_service::{PsilaService, ClusterLibraryHandler};
 use std::fs::File;
 use std::io::{ErrorKind, Write};
-use std::time::SystemTime;
-use std::{thread, time::Duration};
+use std::time::{SystemTime, Duration};
+use std::{thread};
 use uart_protocol::Responce;
 
-use psila_data::network::NetworkHeader;
+// use psila_data::network::{NetworkHeader, };
+
+// use psila_crypto::CryptoBackend;
+use psila_crypto_rust_crypto::RustCryptoBackend;
+use bbqueue::BBBuffer;
+
+use std::thread::sleep;
+
 
 fn hex_to_bytes(s: &str) -> Option<Vec<u8>> {
     if s.len() % 2 == 0 {
@@ -37,12 +49,16 @@ fn hex_to_bytes(s: &str) -> Option<Vec<u8>> {
 fn bytes_to_wireshark_hex(data: &[u8]) -> String {
     let mut hs = String::with_capacity(1024);
 
+    hs.push('\n');
+    hs.push('\r');
+    
     for (addr, d) in data.iter().enumerate() {
         if addr & 0xF == 0 {
             hs.push_str(format!("{:04x}:\t ", addr).as_str());
         }
         hs.push_str(format!("{:02x} ", d).as_str());
         if addr & 0xF == 0xF {
+            hs.push('\r');
             hs.push('\n');
         }
     }
@@ -81,31 +97,102 @@ fn print_frame(frame: &ApplicationServiceHeader) {
     println!(" Counter {:02x}", frame.counter);
 }
 
+struct Device {
+    profile: u16,
+    cluster: u16,
+    endpoint: u8,
+    command: u8,
+    arguments: [u8; 20],
+    data_type: AttributeDataType,
+}
+
+impl Device {
+    pub fn new() -> Self {
+        Self {
+            profile: 0x00,
+            cluster: 0x000,
+            endpoint: 0x00,
+            command: 0x00,
+            arguments: [0; 20],
+            data_type: AttributeDataType::Boolean,
+        }
+    }
+}
+
+impl ClusterLibraryHandler for Device  {
+    fn active_endpoints(&self) -> &[u8] {
+        todo!()
+    }
+
+    fn get_simple_desciptor(&self, endpoint: u8) -> Option<psila_data::device_profile::SimpleDescriptor> {
+        todo!()
+    }
+
+    fn read_attribute(
+        &self,
+        profile: u16,
+        cluster: u16,
+        endpoint: u8,
+        attribute: u16,
+        value: &mut [u8],
+    ) -> Result<(psila_data::cluster_library::AttributeDataType, usize), psila_data::cluster_library::ClusterLibraryStatus> {
+        todo!()
+    }
+
+    fn write_attribute(
+        &mut self,
+        profile: u16,
+        cluster: u16,
+        endpoint: u8,
+        attribute: u16,
+        data_type: psila_data::cluster_library::AttributeDataType,
+        value: &[u8],
+    ) -> Result<(), psila_data::cluster_library::ClusterLibraryStatus> {
+        todo!()
+    }
+
+    fn run(
+        &mut self,
+        profile: u16,
+        cluster: u16,
+        endpoint: u8,
+        command: u8,
+        arguments: &[u8],
+    ) -> Result<(), psila_data::cluster_library::ClusterLibraryStatus> {
+        todo!()
+    }
+    // 
+}
+
+enum ThreadAction {
+    Beat,
+    RadioBeacon,
+}
+
 fn main() -> crossterm::Result<()> {
-    // let bytes = [1, 200, 81, 255, 255, 255, 255, 153, 136, 25, 2, 173, 254, 255, 249, 227, 180, 11, 0, 11, 0, 16, 94, 192, 17, 239, 0, 204, 92, 174, 50, 2, 147, 40];
+    let crypto= RustCryptoBackend::default();
+    let mut packet = Vec::<u8>::with_capacity(127);
 
-    // let s = "01c8b4ffffffff99881902adfefff9e3b40b000b00105ec011da00acd926330293253a";
+    static bbq: BBBuffer<1024> = BBBuffer::<1024>::new();
+    
+    let (tx_queue, mut rx_queue) = bbq.try_split().unwrap();
+    
+    let address = ExtendedAddress::new(0x1234_1234_1234_1234);
+    let default_link_key = Key::from([
+        0xf0, 0xe1, 0xd2, 0xc3, 0xb4, 0xa5, 0x96, 0x87, 0x78, 0x69, 0x5a, 0x4b, 0x3c, 0x2d,
+        0x1e, 0x0f,
+    ]);
 
-    // // let bytes = [2, 173, 254, 255, 249, 227, 180, 11, 0, 11, 0, 16, 94, 192, 17, 239, 0, 204, 92, 174, 50, 2, 147, 40];
-    // let bytes = hex_to_bytes(s).unwrap();
-    // let bytes = bytes.as_slice();
+    let cluser_library_handler = Device::new();
 
-    // let frame = bytes.read_with::<Frame>(&mut 0, FooterMode::None);
+    let mut ps = PsilaService::new(crypto, tx_queue, address, default_link_key, cluser_library_handler);
 
-    // println!("{:x?}", frame);
+    // let path = "/tmp/ws";
 
-    // println!("{}", bytes_to_wireshark_hex(bytes));
-
-    let path = "/tmp/ws";
-
-    let mut f = File::create(path).unwrap();
-
-    // write!(f, "{}\n\n", bytes_to_wireshark_hex(bytes)).is_ok();
-
-    // return Ok(());
+    // let mut f = File::open(path).unwrap();
 
     let mut port = UartLeds::new("/dev/ttyACM0").unwrap();
-    let time_delay = Duration::from_millis(25);
+    let time_delay = Duration::from_millis(50);
 
     let _ = port.restore_program();
 
@@ -113,15 +200,23 @@ fn main() -> crossterm::Result<()> {
 
     //rand::thread_rng().fill_bytes(&mut buf);
 
-    let (s, r) = bounded::<bool>(10);
+    // 12cf60ba4245422320c1cbf77101f715653a22b20a5d4375f60801c1b1f5a8235e0000
+
+    let (s, r) = bounded::<ThreadAction>(10);
+
+    let mut timestamp: u32 = 0x1233;
 
     let id = thread::spawn(move || {
         'lus: loop {
             match r.try_recv() {
-                Ok(_) => (),
+                Ok(ThreadAction::Beat) => (),
+                Ok(ThreadAction::RadioBeacon) => packet.extend([3, 8, 0xbe, 255, 255, 255, 255, 7]),
+                //Ok(ThreadAction::RadioBeacon) => packet.extend([3, 8, 0xbe, 255, 255, 255, 255, 7, 0x1e, 0x4b]),
                 Err(crossbeam_channel::TryRecvError::Disconnected) => break 'lus,
                 Err(crossbeam_channel::TryRecvError::Empty) => (),
             }
+
+            timestamp += 0x0100;
 
             match port.read_responce() {
                 Ok(r) => match r {
@@ -133,22 +228,9 @@ fn main() -> crossterm::Result<()> {
                         } else {
                             String::from("\n")
                         };
-                        println!("\r\n{}", hs);
-                        write!(f, "{}\n\n", hs).is_ok();
-                        let frame = d.read_with::<Frame>(&mut 0, FooterMode::Explicit);
-                        println!("\r\nDECODE: {:x?}", frame);
 
-                        let payload = frame.unwrap().payload;
+                        println!("\r\tRECV: {:?}: {}", ps.receive(timestamp, d), hs);
 
-                        if let Ok((_nwk, used)) = NetworkHeader::unpack(&payload[..]) {
-                            let payload = &payload[used..];
-                            println!("\r\n Payload {:02x?}", payload);
-
-                            if let Ok((aps, _used)) = ApplicationServiceHeader::unpack(&payload[..])
-                            {
-                                print_frame(&aps);
-                            }
-                        }
                     }
                     r => println!("r: {:?}", r),
                 },
@@ -159,8 +241,24 @@ fn main() -> crossterm::Result<()> {
                     println!("SE: {:?}", e);
                     break 'lus;
                 }
-            }
+            } 
             thread::sleep(time_delay);
+            
+
+            if let  Ok( data) =  rx_queue.read() {
+                println!("\r\tTX: {:?} {:?}", port.write_command(uart_protocol::Commands::RadioSend(&data[1..])), data);
+                      
+                // println!("{:?}", bytes_to_wireshark_hex(&data.as_bytes()));
+                let l = data.len();
+                data.release(l );
+            } else { 
+                let _ = ps.update(timestamp);
+                if packet.len() != 0 {
+                    let data = packet.as_bytes();
+                    println!("\r\tTX: {:?} {:?}", port.write_command(uart_protocol::Commands::RadioSend(&data)), data);
+                    packet.clear();
+                }
+            }
         }
         let _ = port.restore_program();
     });
@@ -174,10 +272,6 @@ fn main() -> crossterm::Result<()> {
     let mut e_vec = Vec::<Duration>::with_capacity(10);
 
     loop {
-        if s.send(true).is_err() {
-            break;
-        };
-
         if poll(update)? {
             match read()? {
                 Event::Key(event) => {
@@ -208,7 +302,13 @@ fn main() -> crossterm::Result<()> {
                                             update = Duration::from_millis(total as u64);
                                         }
                                     }
+                                    if s.send(ThreadAction::Beat).is_err() {
+                                        break;
+                                    }
                                 }
+                                Char('b') => if s.send(ThreadAction::RadioBeacon).is_err() {
+                                    break;
+                                },
                                 Char('q') => break,
                                 _ => (),
                             }
