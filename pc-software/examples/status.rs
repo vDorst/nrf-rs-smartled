@@ -246,7 +246,7 @@ fn main() -> crossterm::Result<()> {
             
 
             if let  Ok( data) =  rx_queue.read() {
-                println!("\r\tTX: {:?} {:?}", port.write_command(uart_protocol::Commands::RadioSend(&data[1..])), data);
+                println!("\r\tTX: {:?} {:?}", port.write_command(&uart_protocol::Commands::RadioSend(&data[1..])), data);
                       
                 // println!("{:?}", bytes_to_wireshark_hex(&data.as_bytes()));
                 let l = data.len();
@@ -255,7 +255,7 @@ fn main() -> crossterm::Result<()> {
                 let _ = ps.update(timestamp);
                 if packet.len() != 0 {
                     let data = packet.as_bytes();
-                    println!("\r\tTX: {:?} {:?}", port.write_command(uart_protocol::Commands::RadioSend(&data)), data);
+                    println!("\r\tTX: {:?} {:?}", port.write_command(&uart_protocol::Commands::RadioSend(&data)), data);
                     packet.clear();
                 }
             }

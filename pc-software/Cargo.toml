@@ -19,7 +19,7 @@ signal-hook = "0.3"
 oklab = "1.0"
 crossbeam-channel = "0.5"
 crossterm = "0.25"
-rgb = { version = "0.8", feature = "as-bytes" }
+rgb = { version = "0.8" }
 ieee802154 = "0.6.0"
 byte = "0.2.6"
 psila-data = { path = "../../psila/psila-data/" }

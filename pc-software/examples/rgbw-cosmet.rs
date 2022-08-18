@@ -2,7 +2,7 @@ use rand::{self, Rng};
 use std::{thread, time::Duration};
 
 use pc_software::UartLeds;
-use rgb::{self, ComponentBytes, RGBA8};
+use rgb::{ComponentBytes, RGBA8};
 
 const N_LEDS: usize = 50;
 

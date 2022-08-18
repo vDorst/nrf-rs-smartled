@@ -9,7 +9,7 @@ use crossterm::event::{
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
 use pc_software::UartLeds;
-use rgb::{self, ComponentBytes, RGBA8};
+use rgb::{ComponentBytes, RGBA8};
 
 const N_LEDS: usize = 50;
 const COLMAX: usize = 15;

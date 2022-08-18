@@ -119,7 +119,7 @@ fn main() -> crossterm::Result<()> {
         }
 
         let ser_ret = if let Some(c) = cmd {
-            let ret = port.write_command(c);
+            let ret = port.write_command(&c);
             cmd = None;
             ret
         } else {

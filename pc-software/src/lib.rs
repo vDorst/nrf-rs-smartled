@@ -1,3 +1,6 @@
+#![deny(clippy::pedantic)]
+#![allow(clippy::missing_errors_doc)]
+
 use serialport::{self, SerialPort};
 pub use uart_protocol::Programs;
 use uart_protocol::{Commands, Responce};
@@ -12,7 +15,13 @@ pub struct UartLeds {
     ser_buf: [u8; 1024],
 }
 
+
 impl UartLeds {
+    /// Creata a new `UartLeds`.
+    /// 
+    /// # Errors
+    /// 
+    /// String with the fault
     pub fn new(port: &str) -> Result<Self, String> {
         let ser_dev = match serialport::new(port, 115_200)
             .timeout(Duration::from_millis(100))
@@ -33,19 +42,34 @@ impl UartLeds {
         Ok(s)
     }
 
+    /// `set_program` mode in the uC software.
+    /// 
+    /// # Errors
+    /// 
+    /// String with the fault
     pub fn set_program(&mut self, prg: Programs) -> Result<Responce, Error> {
         let command = Commands::SetProgram(prg);
 
-        self.write_command(command)
+        self.write_command(&command)
     }
 
+    /// `write_bytes` to the uC software.
+    /// 
+    /// # Errors
+    /// 
+    /// String with the fault
     pub fn write_bytes(&mut self, bytes: &[u8]) -> Result<Responce, Error> {
         let command = Commands::LedData(bytes);
 
-        self.write_command(command)
+        self.write_command(&command)
     }
 
-    pub fn write_command(&mut self, command: Commands) -> Result<Responce, Error> {
+    /// `write_command` to the uC software.
+    /// 
+    /// # Errors
+    /// 
+    /// String with the fault
+    pub fn write_command(&mut self, command: &Commands) -> Result<Responce, Error> {
         let data = match command.to_slice(self.ser_buf.as_mut()) {
             None => {
                 return Err(Error::new(
@@ -66,7 +90,7 @@ impl UartLeds {
     pub fn restore_program(&mut self) -> Result<Responce, Error> {
         let command = Commands::SetProgram(Programs::Two);
 
-        self.write_command(command)
+        self.write_command(&command)
     }
 
     pub fn read_responce(&mut self) -> Result<Responce, Error> {
