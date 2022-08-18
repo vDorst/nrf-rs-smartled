@@ -108,6 +108,7 @@ pub enum Channel {
 /// Transmission power in dBm (decibel milliwatt)
 // TXPOWERA enum minus the deprecated Neg30dBm variant and with better docs
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)]
 pub enum TxPower {
     /// +8 dBm
     Pos8dBm,
@@ -757,16 +758,14 @@ impl<'c> Radio<'c> {
         match self.radio.state.read().state().variant().unwrap() {
             // final states
             STATE_A::DISABLED => State::Disabled,
-            STATE_A::TXIDLE => State::TxIdle,
-            STATE_A::RXIDLE => State::RxIdle,
+            STATE_A::TXIDLE |STATE_A::TX => State::TxIdle,
+            STATE_A::RXIDLE| STATE_A::RX | STATE_A::RXRU | STATE_A::RXDISABLE | STATE_A::TXRU => State::RxIdle,
 
             // transitory states
             STATE_A::TXDISABLE => {
                 self.wait_for_state_a(STATE_A::DISABLED);
                 State::Disabled
             }
-            STATE_A::TX => State::TxIdle,
-            STATE_A::RX | STATE_A::RXRU | STATE_A::RXDISABLE | STATE_A::TXRU => State::RxIdle,
         }
     }
 
@@ -844,7 +843,7 @@ impl<'c> Radio<'c> {
             self.radio.events_end.reset();
             dma_end_fence();
             match self.state {
-                RadioWant::Disabled => todo!(),
+                RadioWant::Disabled | RadioWant::ChangeTX | RadioWant::ChangeRX => todo!(),
                 RadioWant::TX => {
                     defmt::println!("\tTX");
                     self.radio.shorts.reset();
@@ -873,7 +872,6 @@ impl<'c> Radio<'c> {
                     // dma_start_fence();
                     // self.radio.tasks_start.write(|w| w.tasks_start().set_bit());
                 }
-                RadioWant::ChangeTX | RadioWant::ChangeRX => todo!(),
             }
         }
         if self

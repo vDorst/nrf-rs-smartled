@@ -1,4 +1,5 @@
 #![deny(clippy::pedantic)]
+#![allow(clippy::doc_markdown)]
 #![no_main]
 #![no_std]
 

@@ -1,3 +1,5 @@
+#![deny(clippy::pedantic)]
+#![allow(clippy::missing_errors_doc)]
 #![allow(clippy::inline_always)]
 
 use super::hal::pac::{timer0, TIMER0, TIMER1, TIMER2};
