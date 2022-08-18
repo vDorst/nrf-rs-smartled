@@ -1,7 +1,7 @@
 use crossbeam_channel::bounded;
 
 //use byte::BytesExt;
-use crossterm::event::KeyModifiers;
+use crossterm::event::{KeyModifiers, KeyEventKind, KeyEventState};
 use crossterm::event::{poll, read, Event, KeyCode::Char, KeyEvent};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 // use ieee802154::mac::{
@@ -11,15 +11,15 @@ use image::EncodableLayout;
 use pc_software::UartLeds;
 use psila_data::{ExtendedAddress, Key};
 //use psila_data::application_service::header::FrameControl;
-use psila_data::application_service::{ApplicationServiceHeader};
-use psila_data::cluster_library::{AttributeDataType};
+use psila_data::application_service::ApplicationServiceHeader;
+use psila_data::cluster_library::AttributeDataType;
 //use psila_data::pack::Pack;
 //use psila_data::security::CryptoProvider;
 use psila_service::{PsilaService, ClusterLibraryHandler};
 use std::fs::File;
 use std::io::{ErrorKind, Write};
 use std::time::{SystemTime, Duration};
-use std::{thread};
+use std::thread;
 use uart_protocol::Responce;
 
 // use psila_data::network::{NetworkHeader, };
@@ -279,6 +279,8 @@ fn main() -> crossterm::Result<()> {
                         KeyEvent {
                             code,
                             modifiers: KeyModifiers::NONE,
+                            kind: KeyEventKind::Press,
+                            state: KeyEventState::NONE,
                         } => {
                             // println!("CODE: {:?}", code);
                             match code {
@@ -318,6 +320,7 @@ fn main() -> crossterm::Result<()> {
                 }
                 Event::Mouse(event) => println!("{:?}", event),
                 Event::Resize(width, height) => println!("New size {}x{}", width, height),
+                Event::FocusGained | Event::FocusLost | Event::Paste(_) => (),
             }
         }
     }

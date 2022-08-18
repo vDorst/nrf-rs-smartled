@@ -1,7 +1,7 @@
 #![deny(clippy::pedantic)]
 
 use crossbeam_channel::bounded;
-use crossterm::event::KeyModifiers;
+use crossterm::event::{KeyModifiers, KeyEventState, KeyEventKind};
 use crossterm::event::{poll, read, Event, KeyCode::Char, KeyEvent};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use pc_software::UartLeds;
@@ -126,6 +126,8 @@ fn main() -> crossterm::Result<()> {
                         KeyEvent {
                             code,
                             modifiers: KeyModifiers::NONE,
+                            kind: KeyEventKind::Press,
+                            state: KeyEventState::NONE,
                         } => {
                             // println!("CODE: {:?}", code);
                             match code {
@@ -159,6 +161,7 @@ fn main() -> crossterm::Result<()> {
                 }
                 Event::Mouse(event) => println!("{:?}", event),
                 Event::Resize(width, height) => println!("New size {}x{}", width, height),
+                Event::FocusGained | Event::FocusLost | Event::Paste(_) => (),
             }
         }
     }

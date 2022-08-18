@@ -18,7 +18,7 @@ uart-protocol = { path = "../uart-protocol"}
 signal-hook = "0.3"
 oklab = "1.0"
 crossbeam-channel = "0.5"
-crossterm = "0.23"
+crossterm = "0.25"
 rgb = { version = "0.8", feature = "as-bytes" }
 ieee802154 = "0.6.0"
 byte = "0.2.6"

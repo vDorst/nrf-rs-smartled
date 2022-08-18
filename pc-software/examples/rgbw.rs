@@ -4,7 +4,7 @@ use std::{thread, time::Duration};
 use crossterm::event::{
     read, Event,
     KeyCode::{self, Char},
-    KeyEvent, KeyModifiers,
+    KeyEvent, KeyModifiers, KeyEventKind, KeyEventState,
 };
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
@@ -71,6 +71,8 @@ fn main() -> crossterm::Result<()> {
                 KeyEvent {
                     code,
                     modifiers: KeyModifiers::NONE,
+                    kind: KeyEventKind::Press,
+                    state: KeyEventState::NONE,
                 } => match code {
                     Char(' ') => {
                         col = rand::thread_rng().gen_range(0..=COLMAX);
@@ -109,6 +111,7 @@ fn main() -> crossterm::Result<()> {
             },
             Event::Mouse(event) => println!("{:?}", event),
             Event::Resize(width, height) => println!("New size {}x{}", width, height),
+            Event::FocusGained | Event::FocusLost | Event::Paste(_) => (),
         }
 
         buf[0] = match col {

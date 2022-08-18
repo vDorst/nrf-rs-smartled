@@ -20,13 +20,6 @@ fn effect(led: &mut RGBA8) {
     effect_u8(&mut led.a);
 }
 
-fn dim(led: &mut u8) {
-    let mut data: u16 = *led as u16;
-    data *= 7;
-    data >>= 3;
-    *led = data as u8;
-}
-
 const COLMAX: usize = 14;
 
 fn main() -> crossterm::Result<()> {

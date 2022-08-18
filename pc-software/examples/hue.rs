@@ -1,4 +1,4 @@
-use colorsys::{ColorTransform, Hsl, Rgb};
+use colorsys::{Hsl, Rgb};
 use signal_hook::consts::SIGINT;
 use std::sync::{
     atomic::{AtomicBool, Ordering},

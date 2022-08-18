@@ -1,4 +1,4 @@
-use oklab::{oklab_to_srgb, srgb_to_oklab, Oklab, RGB};
+use oklab::{oklab_to_srgb, Oklab};
 use signal_hook::consts::SIGINT;
 use std::sync::{
     atomic::{AtomicBool, Ordering},

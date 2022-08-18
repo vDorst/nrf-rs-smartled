@@ -1,5 +1,5 @@
+use crossterm::event::{KeyEventKind, KeyEventState};
 use rand::{self, Rng};
-use std::{thread, time::Duration};
 use uart_protocol::Commands;
 
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
@@ -9,7 +9,6 @@ use crossterm::{
         KeyCode::{self, Char},
         KeyEvent, KeyModifiers,
     },
-    Command,
 };
 
 use pc_software::UartLeds;
@@ -75,6 +74,8 @@ fn main() -> crossterm::Result<()> {
                 KeyEvent {
                     code,
                     modifiers: KeyModifiers::NONE,
+                    kind: KeyEventKind::Press,
+                    state: KeyEventState::NONE,
                 } => match code {
                     Char(' ') => {
                         col = rand::thread_rng().gen_range(0..=COLMAX);
@@ -114,6 +115,7 @@ fn main() -> crossterm::Result<()> {
             },
             Event::Mouse(event) => println!("{:?}", event),
             Event::Resize(width, height) => println!("New size {}x{}", width, height),
+            Event::FocusGained | Event::FocusLost | Event::Paste(_) => (),
         }
 
         let ser_ret = if let Some(c) = cmd {
