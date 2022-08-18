@@ -1,7 +1,9 @@
+#![deny(clippy::pedantic)]
 #![no_main]
 #![no_std]
 
 mod timers;
+use core::convert::TryFrom;
 use timers::StopWatch;
 
 use defmt_rtt as _; // global logger
@@ -48,7 +50,7 @@ use usb_device::{
 
 use usbd_serial::{self, DefaultBufferStore, SerialPort, USB_CLASS_CDC};
 
-use uart_protocol::{self, Programs, Commands, Responce, N_BYTES, N_LEDS, TOTAL_BYTES};
+use uart_protocol::{self, Commands, Programs, Responce, N_BYTES, N_LEDS, TOTAL_BYTES};
 
 pool!(FRAMEBUFFER: Deque<u8, TOTAL_BYTES>);
 
@@ -75,30 +77,22 @@ impl Led {
         for _ in 0..PWM_N_LEDS {
             for mut d in [self.g, self.r, self.b] {
                 for _ in 0..8 {
-                    buf[n] = if d & 0x80 != 0 { PWM_T1H } else { PWM_T0H };
+                    buf[n] = if d & 0x80 == 0 { PWM_T0H } else { PWM_T1H };
                     d <<= 1;
                     n += 1;
                 }
             }
         }
 
-        buf[PWM_DMA_MEM_SIZE-1] = PWM_POL;
+        buf[PWM_DMA_MEM_SIZE - 1] = PWM_POL;
     }
 }
-
-// impl LedDataBuffer {
-//     pub fn push_led(&mut self, a: Led) {
-//         self.push_back(a.g);
-//         self.push_back(a.r);
-//         self.push_back(a.b);
-//     }
-// }
 
 pub struct Frame {
     pub inner: Box<FRAMEBUFFER>,
 }
 
-impl<'a> Frame {
+impl Frame {
     #[must_use]
     pub fn new() -> Option<Self> {
         if let Some(buf) = FRAMEBUFFER::alloc() {
@@ -134,34 +128,20 @@ impl<'a> Frame {
         }
     }
 
-    // pub fn push_byte(&mut self, data: u8) ->  {
-    //     self.inner.push_back(data)
-    // }
-
-    // pub fn pop(&mut self) -> Option<&[u8]> {
-    //     if self.buf.len() != self.tail {
-    //         let ptr = self.buf[self.tail..self.tail + N_BYTES].as_ref();
-    //         self.tail += N_BYTES;
-    //         return Some(ptr);
-    //     }
-    //     None
-    // }
-
     pub fn pwm_next(&mut self, buf: &mut [u16]) -> bool {
         let mut n = 0;
         let mut d = 0;
-     
+
         for (num, data) in buf[0..(PWM_N_LEDS * N_BYTES * 8)].iter_mut().enumerate() {
             if num % 8 == 0 {
-                let val = self.inner.pop_front();
-                if val.is_none() {
-                    break;
-                }
-                d = val.unwrap();
+                match self.inner.pop_front() {
+                    None => break,
+                    Some(val) => d = val,
+                };
                 n += 8;
             }
-                
-            *data = if d & 0x80 != 0 { PWM_T1H } else { PWM_T0H };
+
+            *data = if d & 0x80 == 0 { PWM_T0H } else { PWM_T1H };
             d <<= 1;
         }
 
@@ -173,12 +153,6 @@ impl<'a> Frame {
         n != 0
     }
 }
-
-// This trivial implementation of `drop` adds a print to console.
-// impl Drop for Frame {
-//     fn drop(&mut self) {
-//     }
-// }
 
 pub enum RadioAction {
     Disabled,
@@ -247,7 +221,19 @@ type SeqBuffer = &'static mut [u16; PWM_DMA_MEM_SIZE];
 
 #[rtic::app(device = crate::hal::pac, peripherals = true, dispatchers = [SWI0_EGU0, SWI1_EGU1, SWI2_EGU2, SWI3_EGU3])]
 mod app {
-    use super::*;
+    use defmt::println;
+    use nrf52840_hal::prelude::StatefulOutputPin;
+    use hal::pac::{TIMER0, TIMER1};
+
+    use super::{
+        hal, ieee802154, pwm, uart_protocol, Channel, Commands, Consumer, DefaultBufferStore,
+        ExternalOscillator, Frame, Internal, Led, Level, LfOscStopped, LoadMode, Output, OutputPin,
+        Packet, Pin, Pool, Prescaler, Producer, PushPull, Pwm, PwmData, PwmEvent, PwmSeq, Queue,
+        Radio, RadioAction, RadioReturn, Responce, Seq, SeqBuffer, SerialPort, State, StopWatch,
+        TryFrom, UsbBus, UsbBusAllocator, UsbDevice, UsbDeviceBuilder, UsbPeripheral, UsbVidPid,
+        Usbd, B, FRAMEBUFFER, G, LEDMAX, N_BYTES, N_LEDS, PWM0, PWM_DMA_MEM_SIZE, PWM_MAX, PWM_POL,
+        R, TOTAL_BYTES, USB_CLASS_CDC,
+    };
 
     #[shared]
     struct Shared {
@@ -258,6 +244,7 @@ mod app {
         #[lock_free]
         radio: Option<Radio<'static>>,
         program: uart_protocol::Programs,
+        idle_counter: usize,
     }
 
     #[local]
@@ -270,11 +257,12 @@ mod app {
         ser_buf_consumer: Consumer<'static, PwmData, 4>,
         // rxrf_buf_producer: Producer<'static, Packet, 4>,
         rxrf_buf_consumer: Consumer<'static, RadioReturn, 4>,
-        tmr0: StopWatch,
+        tmr0: StopWatch<TIMER0>,
         led_gr: Pin<Output<PushPull>>,
         // `_led_bl: Pin<Output<PushPull>>,
         debug_pin: Pin<Output<PushPull>>,
         update_pin: Pin<Output<PushPull>>,
+        tmr1: StopWatch<TIMER1>,
     }
 
     #[init(local = [memory: [u8; 4096] = [0; 4096], rxrf_buf: Queue<Packet, 4> = Queue::new(), led_buf: Queue<PwmData, 4> = Queue::new(), ser_buf: Queue<PwmData, 4> = Queue::new(), radio_buf: Queue<ieee802154::RadioReturn, 4> = Queue::new(), usbbus: Option<UsbBusAllocator<UsbBus>> = None, clock: Option<hal::clocks::Clocks<ExternalOscillator, Internal, LfOscStopped>> =
@@ -286,7 +274,7 @@ mod app {
 
         *ctx.local.clock = Some(hal::clocks::Clocks::new(ctx.device.CLOCK).enable_ext_hfosc());
 
-        let clock = &*ctx.local.clock.as_ref().unwrap();
+        let clock = ctx.local.clock.as_ref().unwrap();
 
         defmt::println!("test");
 
@@ -322,8 +310,6 @@ mod app {
         let pin_debug = port0.p0_06.into_push_pull_output(Level::Low).degrade();
         let pin_update = port0.p0_07.into_push_pull_output(Level::Low).degrade();
 
-        // let tmr1 = Timer::new(ctx.device.TIMER1);
-
         *ctx.local.usbbus = Some(Usbd::new(UsbPeripheral::new(ctx.device.USBD, clock)));
 
         let usb_bus = ctx.local.usbbus.as_ref().unwrap();
@@ -338,19 +324,18 @@ mod app {
             .max_packet_size_0(64) // (makes control transfers 8x faster)
             .build();
 
-
         defmt::println!("INIT1: {=u32}", ctx.local.packet_buf.as_ptr() as u32);
 
         // INIT RADIO
         let (radio_tx, radio_rx) = ctx.local.radio_buf.split();
-        let mut radio = Radio::init(ctx.device.RADIO, &clock, radio_tx, ctx.local.packet_buf);
+        let mut radio = Radio::init(ctx.device.RADIO, clock, radio_tx, ctx.local.packet_buf);
         radio.set_channel(Channel::_15);
         radio.set_txpower(ieee802154::TxPower::Pos8dBm);
-        let mut  p = Packet::new();
+        let mut p = Packet::new();
         p.copy_from_slice(&[3, 8, 0xAA, 255, 255, 255, 255, 7]);
-        radio.send(&mut p);
+        radio.send(&p);
 
-        radio_handler::spawn( RadioAction::RxMode );
+        radio_handler::spawn(RadioAction::RxMode).ok();
 
         green_led.set_low().unwrap();
         red_led.set_high().unwrap();
@@ -362,9 +347,8 @@ mod app {
             pwm::Channel::C0,
             port0.p0_05.into_push_pull_output(Level::Low).degrade(),
         )
-            .set_max_duty(PWM_MAX)
-            .set_prescaler(Prescaler::Div1);
-
+        .set_max_duty(PWM_MAX)
+        .set_prescaler(Prescaler::Div1);
 
         let (mut led_buf_producer, led_buf_consumer) = ctx.local.led_buf.split();
 
@@ -376,7 +360,7 @@ mod app {
                     r: 0x00,
                     b: 0x04,
                 },
-                repeat: N_LEDS as u16,
+                repeat: u16::try_from(N_LEDS).expect("N_LEDS fit in u16!"),
             })
             .ok();
 
@@ -394,6 +378,9 @@ mod app {
         let mut tmr0 = StopWatch::new(ctx.device.TIMER0, 8333);
         tmr0.start();
 
+        let mut tmr1 = StopWatch::new(ctx.device.TIMER1, 1_000_000);
+        tmr1.start();
+
         let (ser_buf_producer, ser_buf_consumer) = ctx.local.ser_buf.split();
         // let (rxrf_buf_producer, rxrf_buf_consumer) = ctx.local.rxrf_buf.split();
 
@@ -404,6 +391,7 @@ mod app {
                 // tmr1,
                 radio: Some(radio),
                 program: uart_protocol::Programs::Two,
+                idle_counter: 0,
             },
             Local {
                 led_buf_consumer,
@@ -418,6 +406,7 @@ mod app {
                 tmr0,
                 debug_pin: pin_debug,
                 update_pin: pin_update,
+                tmr1,
             },
             init::Monotonics(),
         )
@@ -447,22 +436,22 @@ mod app {
             *local_pwm = match STATE {
                 PwmData::RAW(p) => {
                     let (buf0, buf1, pwm) = pwm.split();
-                    
+
                     let (buf0, start_pwm) = if let Some(buf0) = buf0 {
                         let next_data = p.pwm_next(buf0);
                         dp.set_high().unwrap();
                         if !next_data {
                             *STATE = PwmData::EMPTY;
                             dp.set_low().unwrap();
-                        }                        
+                        }
                         (Some(buf0), true)
                     } else {
                         defmt::println!("NoBUF0");
                         (None, false)
                     };
-                    
+
                     pwm.load(buf0, buf1, start_pwm).ok()
-                }                
+                }
                 PwmData::EMPTY => {
                     dp.set_low().unwrap();
                     pwm.stop();
@@ -500,10 +489,10 @@ mod app {
             .enqueue(PwmData::RAW(input))
             .is_ok()
         {
-		update_pwm::spawn(true).ok();
+            update_pwm::spawn(true).ok();
         } else {
-		// defmt::println!("pwm_enqueue");
-	}        
+            // defmt::println!("pwm_enqueue");
+        }
         led.set_low().unwrap();
     }
 
@@ -516,13 +505,11 @@ mod app {
         if let Some(mut buf) = Frame::new() {
             // move BUFfer to the right
             for i in (0..BUF.len() - N_BYTES).rev() {
-                BUF[i + N_BYTES] = BUF[i]
+                BUF[i + N_BYTES] = BUF[i];
             }
 
             // Render new colour
-            if *TICK != 0 {
-                *TICK -= 1;
-            } else {
+            if *TICK == 0 {
                 *TICK = 20;
                 match STATE {
                     State::R_UP => {
@@ -583,6 +570,8 @@ mod app {
                     }
                 }
                 // rprintln!("{:?}: {} {} {}", *STATE, BUF[G], BUF[R], BUF[B]);
+            } else {
+                *TICK -= 1;
             }
 
             if buf.copy_from_slice(&BUF[..]) {
@@ -607,13 +596,11 @@ mod app {
         if let Some(mut buf) = Frame::new() {
             // move BUFfer to the right
             for i in (0..BUF.len() - N_BYTES).rev() {
-                BUF[i + N_BYTES] = BUF[i]
+                BUF[i + N_BYTES] = BUF[i];
             }
 
             // Render new colour
-            if *TICK != 0 {
-                *TICK -= 1;
-            } else {
+            if *TICK == 0 {
                 *TICK = 10;
                 match STATE {
                     State::R_UP => {
@@ -698,6 +685,8 @@ mod app {
                     }
                 }
                 // rprintln!("{:?}: {} {} {}", *STATE, BUF[G], BUF[R], BUF[B]);
+            } else {
+                *TICK -= 1;
             }
 
             if buf.copy_from_slice(&BUF[..]) {
@@ -719,12 +708,11 @@ mod app {
     fn usb_poll(mut ctx: usb_poll::Context) {
         let serial = ctx.local.usb_serial;
 
-
         if ctx.local.usb_device.poll(&mut [serial]) {
-                let USB_BUFFER = ctx.local.usb_buffer;
-                let start = *ctx.local.start;
-                let end = start + USB_EP_BUF_SIZE;
-                let buf_prt = &mut USB_BUFFER[start..end];
+            let USB_BUFFER = ctx.local.usb_buffer;
+            let start = *ctx.local.start;
+            let end = start + USB_EP_BUF_SIZE;
+            let buf_prt = &mut USB_BUFFER[start..end];
 
             match serial.read(buf_prt) {
                 Ok(0) => panic!("Can't happen!"),
@@ -734,18 +722,18 @@ mod app {
                     let found_zero = buf_prt[count - 1] == 0;
 
                     // Invalid data, expect count < USB_EP_BUF_SIZE and no found_zero.
-                    *ctx.local.start = if count != USB_EP_BUF_SIZE && !found_zero { 
-                        defmt::println!("data error");
+                    *ctx.local.start = if count != USB_EP_BUF_SIZE && !found_zero {
+                        defmt::println!("data error c{} f{}", count, found_zero);
                         0
                     } else if found_zero {
-                        let cmd = Commands::from_bytes(&mut USB_BUFFER[..start+count]);
+                        let cmd = Commands::from_bytes(&mut USB_BUFFER[..start + count]);
 
                         let res: Responce = match cmd {
                             Some(Commands::LedData(data)) => {
                                 // defmt::println!("Set Led");
                                 if let Some(mut pf) = Frame::new() {
                                     let _ = pf.copy_from_slice(data);
-                                
+
                                     match ctx.local.ser_buf_producer.enqueue(PwmData::RAW(pf)) {
                                         Ok(_) => Responce::LedAcceptedBufferSpace(1),
                                         Err(_) => Responce::Error,
@@ -759,18 +747,22 @@ mod app {
                                 match ctx.local.ser_buf_producer.enqueue(PwmData::SetProgram(prg)) {
                                     Ok(_) => Responce::Ok,
                                     Err(_) => Responce::Error,
-                                }                                
+                                }
                             }
                             Some(Commands::GetProgram) => {
                                 defmt::println!("Get PRG");
-                                ctx.shared.program.lock( |prg| {
-                                    Responce::Program(*prg)
-                                })
+                                ctx.shared.program.lock(|prg| Responce::Program(*prg))
                             }
-                            Some(Commands::RadioChannel(c)) => if radio_handler::spawn(RadioAction::Channel(c)).is_ok() { Responce::Ok } else { Responce::Reject },
+                            Some(Commands::RadioChannel(c)) => {
+                                if radio_handler::spawn(RadioAction::Channel(c)).is_ok() {
+                                    Responce::Ok
+                                } else {
+                                    Responce::Reject
+                                }
+                            }
                             Some(Commands::RadioSend(d)) => {
                                 let mut p = Packet::new();
-                                p.copy_from_slice(&d[..]);
+                                p.copy_from_slice(d);
                                 if radio_handler::spawn(RadioAction::Tx(p)).is_ok() {
                                     Responce::RadioAcceptedBufferSpace(1)
                                 } else {
@@ -783,7 +775,7 @@ mod app {
                         let ser_res = res.to_slice(&mut USB_BUFFER[..]).unwrap();
                         let _ = serial.write(ser_res);
                         0
-                    } else if start + USB_EP_BUF_SIZE >=USB_BUFFER.len() {
+                    } else if start + USB_EP_BUF_SIZE >= USB_BUFFER.len() {
                         0
                     } else {
                         start + USB_EP_BUF_SIZE
@@ -794,20 +786,23 @@ mod app {
         }
 
         // Write data
-        if let Some(pkt) = ctx.local.rxrf_buf_consumer.dequeue() {                
+        if let Some(pkt) = ctx.local.rxrf_buf_consumer.dequeue() {
             let mut tb = [0; 144];
             let slice = pkt.to_slice(&mut tb);
-            let res = Responce::RadioRecv(&slice);
+            let res = Responce::RadioRecv(slice);
             let ser_res = res.to_slice(&mut ctx.local.usb_write[..]).unwrap();
             // defmt::println!("TX COBS {}", ser_res);
             let _ = serial.write(ser_res);
         }
     }
 
-    #[idle]
-    fn idle(_ctx: idle::Context) -> ! {
+    #[idle(shared = [idle_counter])]
+    fn idle(mut ctx: idle::Context) -> ! {
         defmt::println!("INIT LOOP");
         loop {
+            ctx.shared.idle_counter.lock(|v| {
+                *v += 1;
+            });
             usb_poll::spawn().ok();
             // Don't use this, causes USB not to work.
             //cortex_m::asm::wfi();
@@ -819,9 +814,9 @@ mod app {
         defmt::println!("RADIO");
 
         if let Some(mut radio) = ctx.shared.radio.take() {
-            radio.action(action);
+            radio.action(&action);
 
-            *ctx.shared.radio = Some(radio);            
+            *ctx.shared.radio = Some(radio);
         }
     }
 
@@ -829,13 +824,13 @@ mod app {
     fn RADIO_handler(ctx: RADIO_handler::Context) {
         if let Some(mut radio) = ctx.shared.radio.take() {
             radio.handle_interrupt();
-            
+
             *ctx.shared.radio = Some(radio);
         }
     }
 
     #[task(priority = 3, binds = PWM0, shared = [pwm])]
-    fn PWM0_handler(ctx: PWM0_handler::Context) { 
+    fn PWM0_handler(ctx: PWM0_handler::Context) {
         if let Some(pwm) = ctx.shared.pwm {
             if pwm.is_event_triggered(PwmEvent::SeqEnd(Seq::Seq0)) {
                 pwm.reset_event(PwmEvent::SeqEnd(Seq::Seq0));
@@ -844,18 +839,38 @@ mod app {
         }
     }
 
-    #[task(binds = TIMER0, shared = [program], local = [ser_buf_consumer, tmr0, led_gr, tick: bool = false, timeout: u16 = 500])]
+    #[task(binds = TIMER1, shared = [idle_counter], local = [tmr1, led_gr])]
+    fn on_TIMER1(mut ctx: on_TIMER1::Context) {
+        ctx.local.tmr1.reset_event(0);
+
+        ctx.shared.idle_counter.lock(|c| {
+            let q = *c;
+            println!("IDLE: {=usize}", q);
+            *c = 0;
+            
+        });
+
+        let led = ctx.local.led_gr;
+
+        if led.is_set_low().unwrap() {            
+            led.set_high().unwrap();
+        } else {
+            led.set_low().unwrap();
+        }
+    }
+
+    #[task(binds = TIMER0, shared = [program], local = [ser_buf_consumer, tmr0, tick: bool = false, timeout: u16 = 500])]
     fn on_TIMER0(mut ctx: on_TIMER0::Context) {
         let TICK = ctx.local.tick;
 
         ctx.local.tmr0.reset_event(0);
 
-        let led = ctx.local.led_gr;
+
         let ser_buf = ctx.local.ser_buf_consumer;
         let timeout = ctx.local.timeout;
 
-        ctx.shared.program.lock(|prg| {      
-            if let Some(cmd) = ser_buf.dequeue() {          
+        ctx.shared.program.lock(|prg| {
+            if let Some(cmd) = ser_buf.dequeue() {
                 match cmd {
                     PwmData::RAW(data) => {
                         if *prg == uart_protocol::Programs::Serial {
@@ -875,10 +890,9 @@ mod app {
 
             if *TICK {
                 *TICK = false;
-                led.set_low().unwrap();
             } else {
                 *TICK = true;
-                led.set_high().unwrap();
+
                 match *prg {
                     uart_protocol::Programs::Serial => (
                         // if *timeout == 0 {

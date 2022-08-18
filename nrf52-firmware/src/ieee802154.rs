@@ -1,8 +1,9 @@
 //! IEEE 802.15.4 radio
 
 use core::{
+    convert::TryFrom,
     marker::PhantomData,
-    ops::{self, RangeFrom, Deref, DerefMut},
+    ops::{self, RangeFrom},
     sync::atomic::{self, Ordering},
 };
 
@@ -19,9 +20,7 @@ use hal::{
     timer::{self, Timer},
 };
 
-use heapless::{
-    spsc::{Producer},
-};
+use heapless::spsc::Producer;
 
 use crate::RadioAction;
 
@@ -43,7 +42,7 @@ pub struct Radio<'c> {
 /// Default Clear Channel Assessment method = Carrier sense
 pub const DEFAULT_CCA: Cca = Cca::CarrierSense;
 
-/// Default radio channel = Channel 11 (`2_405` MHz)
+/// Default radio channel = Channel 11 (2_405 MHz)
 pub const DEFAULT_CHANNEL: Channel = Channel::_11;
 
 /// Default TX power = 0 dBm
@@ -108,7 +107,7 @@ pub enum Channel {
 
 /// Transmission power in dBm (decibel milliwatt)
 // TXPOWERA enum minus the deprecated Neg30dBm variant and with better docs
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum TxPower {
     /// +8 dBm
     Pos8dBm,
@@ -164,7 +163,7 @@ impl TxPower {
 #[derive(defmt::Format, Debug)]
 pub enum RadioReturn {
     TxDone,
-    Recv { pkt: Packet, crc: u16},
+    Recv { pkt: Packet, crc: u16 },
     // State(STATE_A),
     ED(u8),
 }
@@ -172,17 +171,20 @@ pub enum RadioReturn {
 impl RadioReturn {
     pub fn to_slice<'a>(&self, buf: &'a mut [u8]) -> &'a mut [u8] {
         let cnt = match self {
-            RadioReturn::TxDone => { buf[0] = 0; 1 },
+            RadioReturn::TxDone => {
+                buf[0] = 0;
+                1
+            }
             RadioReturn::Recv { pkt, crc } => {
                 buf[0] = 1;
                 let cnt = pkt.rx_len() as usize + 1;
                 let byt = pkt.rx_data();
 
-                buf[1..cnt].copy_from_slice(&byt[..]);
-                buf[cnt..cnt+2].copy_from_slice(&crc.to_ne_bytes());
-                buf[cnt+2] = pkt.lqi();
+                buf[1..cnt].copy_from_slice(byt);
+                buf[cnt..cnt + 2].copy_from_slice(&crc.to_ne_bytes());
+                buf[cnt + 2] = pkt.lqi();
                 cnt + 3
-            },
+            }
             RadioReturn::ED(v) => {
                 buf[0] = 2;
                 buf[1] = *v;
@@ -193,7 +195,6 @@ impl RadioReturn {
         &mut buf[..cnt]
     }
 }
-
 
 #[derive(PartialEq, Eq)]
 enum RadioWant {
@@ -206,8 +207,12 @@ enum RadioWant {
 
 impl<'c> Radio<'c> {
     /// Initializes the radio for IEEE 802.15.4 operation
-    pub fn init<L, LSTAT>(radio: RADIO, _clocks: &'c Clocks<ExternalOscillator, L, LSTAT>, tx: Producer<'c, RadioReturn, 4>, buffer: &'c mut Packet) -> Self {
-
+    pub fn init<L, LSTAT>(
+        radio: RADIO,
+        _clocks: &'c Clocks<ExternalOscillator, L, LSTAT>,
+        tx: Producer<'c, RadioReturn, 4>,
+        buffer: &'c mut Packet,
+    ) -> Self {
         defmt::println!("INIT2: {=u32}", buffer.as_ptr() as u32);
 
         let mut radio = Self {
@@ -216,7 +221,7 @@ impl<'c> Radio<'c> {
             _clocks: PhantomData,
             result: tx,
             state: RadioWant::Disabled,
-            buffer: buffer,
+            buffer,
         };
 
         // shortcuts will be kept off by default and only be temporarily enabled within blocking
@@ -276,7 +281,7 @@ impl<'c> Radio<'c> {
 
         // set default settings
         radio.set_channel(Channel::_15);
-        radio.set_cca(DEFAULT_CCA);
+        radio.set_cca(&DEFAULT_CCA);
         radio.set_sfd(DEFAULT_SFD);
         radio.set_txpower(TxPower::Pos8dBm);
 
@@ -289,12 +294,12 @@ impl<'c> Radio<'c> {
         unsafe {
             self.radio
                 .frequency
-                .write(|w| w.map().clear_bit().frequency().bits(channel as u8))
+                .write(|w| w.map().clear_bit().frequency().bits(channel as u8));
         }
     }
 
     /// Changes the Clear Channel Assessment method
-    pub fn set_cca(&mut self, cca: Cca) {
+    pub fn set_cca(&mut self, cca: &Cca) {
         self.needs_enable = true;
         match cca {
             Cca::CarrierSense => self.radio.ccactrl.write(|w| w.ccamode().carrier_mode()),
@@ -303,7 +308,7 @@ impl<'c> Radio<'c> {
                 // and writing the CCAEDTHRES field to a chosen value."
                 self.radio
                     .ccactrl
-                    .write(|w| unsafe { w.ccamode().ed_mode().ccaedthres().bits(ed_threshold) });
+                    .write(|w| unsafe { w.ccamode().ed_mode().ccaedthres().bits(*ed_threshold) });
             }
         }
     }
@@ -377,10 +382,11 @@ impl<'c> Radio<'c> {
         }
 
         // wait until we have received something
-        self.wait_for_event(Event::End);
+        self.wait_for_event(&Event::End);
         dma_end_fence();
 
-        let crc = self.radio.rxcrc.read().rxcrc().bits() as u16;
+        let crc = self.radio.rxcrc.read().rxcrc().bits();
+        let crc = u16::try_from(crc & 0xFFFF).unwrap();
         if self.radio.crcstatus.read().crcstatus().bit_is_set() {
             Ok(crc)
         } else {
@@ -400,11 +406,7 @@ impl<'c> Radio<'c> {
     /// Note that the time it takes to switch the radio to RX mode is included in the timeout count.
     /// This transition may take up to a hundred of microseconds; see the section 6.20.15.8 in the
     /// Product Specification for more details about timing
-    pub fn recv_timeout<I>(
-        &mut self,
-        timer: &mut Timer<I>,
-        microseconds: u32,
-    ) -> Result<u16, Error>
+    pub fn recv_timeout<I>(&mut self, timer: &mut Timer<I>, microseconds: u32) -> Result<u16, Error>
     where
         I: timer::Instance,
     {
@@ -434,17 +436,18 @@ impl<'c> Radio<'c> {
             }
         }
 
-        if !recv_completed {
-            // Cancel the reception if it did not complete until now
-            self.cancel_recv();
-            Err(Error::Timeout)
-        } else {
-            let crc = self.radio.rxcrc.read().rxcrc().bits() as u16;
+        if recv_completed {
+            let crc = self.radio.rxcrc.read().rxcrc().bits();
+            let crc = u16::try_from(crc & 0xFFFF).unwrap();
             if self.radio.crcstatus.read().crcstatus().bit_is_set() {
                 Ok(crc)
             } else {
                 Err(Error::Crc(crc))
             }
+        } else {
+            // Cancel the reception if it did not complete until now
+            self.cancel_recv();
+            Err(Error::Timeout)
         }
     }
 
@@ -471,7 +474,6 @@ impl<'c> Radio<'c> {
         self.radio.intenset.write(|w| w.end().set_bit());
         dma_start_fence();
         self.radio.tasks_start.write(|w| w.tasks_start().set_bit());
-        
     }
 
     fn cancel_recv(&mut self) {
@@ -576,7 +578,7 @@ impl<'c> Radio<'c> {
                 .set_bit()
         });
 
-        *self.buffer = packet.clone();
+        *self.buffer = *packet;
 
         // the DMA transfer will start at some point after the following write operation so
         // we place the compiler fence here
@@ -639,7 +641,6 @@ impl<'c> Radio<'c> {
     // NOTE we do NOT check the address of `packet` because the mutable reference ensures it's
     // allocated in RAM
     pub fn send_no_cca(&mut self, packet: &Packet) {
-
         self.put_in_tx_mode();
 
         // clear related events
@@ -647,7 +648,7 @@ impl<'c> Radio<'c> {
         self.radio.events_end.reset();
         self.radio.shorts.reset();
 
-        *self.buffer = packet.clone();
+        *self.buffer = *packet;
 
         // start DMA transfer
         dma_start_fence();
@@ -667,7 +668,6 @@ impl<'c> Radio<'c> {
 
         // configure radio to disable transmitter once packet is sent
         self.radio.shorts.modify(|_, w| w.end_disable().set_bit());
-
 
         self.radio.tasks_start.write(|w| w.tasks_start().set_bit());
 
@@ -727,7 +727,9 @@ impl<'c> Radio<'c> {
         };
 
         if disable {
-            self.radio.tasks_disable.write(|w| w.tasks_disable().set_bit());
+            self.radio
+                .tasks_disable
+                .write(|w| w.tasks_disable().set_bit());
             self.wait_for_state_a(STATE_A::DISABLED);
         }
 
@@ -764,14 +766,11 @@ impl<'c> Radio<'c> {
                 State::Disabled
             }
             STATE_A::TX => State::TxIdle,
-            STATE_A::RX => State::RxIdle,
-            STATE_A::RXRU => State::RxIdle,
-            STATE_A::RXDISABLE => State::RxIdle,
-            STATE_A::TXRU => State::RxIdle,            
+            STATE_A::RX | STATE_A::RXRU | STATE_A::RXDISABLE | STATE_A::TXRU => State::RxIdle,
         }
     }
 
-    fn wait_for_event(&self, event: Event) {
+    fn wait_for_event(&self, event: &Event) {
         match event {
             Event::End => {
                 while self.radio.events_end.read().events_end().bit_is_clear() {}
@@ -796,30 +795,36 @@ impl<'c> Radio<'c> {
     }
 
     /// action
-    pub fn action(&mut self, action: RadioAction) {
+    pub fn action(&mut self, action: &RadioAction) {
         let want_state = match action {
             RadioAction::Disabled => {
                 let state = RadioWant::Disabled;
-                if state == self.state { return; }
+                if state == self.state {
+                    return;
+                }
                 self.disable();
                 state
             }
             RadioAction::RxMode => {
                 let state = RadioWant::RX;
-                if state == self.state { return; }
-                unsafe { self.start_recv(); }
+                if state == self.state {
+                    return;
+                }
+                unsafe {
+                    self.start_recv();
+                }
 
                 state
             }
             RadioAction::Tx(p) => {
                 defmt::println!("Radio Send {}", p.len());
-                self.send(&p);
+                self.send(p);
                 RadioWant::TX
-            },
+            }
             RadioAction::Channel(chn) => {
                 let channel = match chn {
                     11 => Channel::_11,
-                    15 => Channel::_15,
+                    // 15 => Channel::_15,
                     20 => Channel::_20,
                     25 => Channel::_25,
                     _ => Channel::_15,
@@ -845,18 +850,18 @@ impl<'c> Radio<'c> {
                     self.radio.shorts.reset();
 
                     defmt::println!("Radio RXSwitch");
-                    // unsafe { self.start_recv(); }                    
+                    // unsafe { self.start_recv(); }
 
                     self.state = RadioWant::RX;
-                },
+                }
                 RadioWant::RX => {
                     defmt::println!("\tRX");
-                    let crc = self.radio.rxcrc.read().rxcrc().bits() as u16;
-                    if self.radio.crcstatus.read().crcstatus().bit_is_set()
-                    {
-                        let bla = self.buffer.clone();
+                    let crc = self.radio.rxcrc.read().rxcrc().bits();
+                    let crc = u16::try_from(crc & 0xFFFF).unwrap();
+                    if self.radio.crcstatus.read().crcstatus().bit_is_set() {
+                        let bla = *self.buffer;
                         // defmt::println!("\tRX {:04x} {:x}", crc, bla);
-                        let ret = RadioReturn::Recv{ pkt: bla, crc};
+                        let ret = RadioReturn::Recv { pkt: bla, crc };
                         if self.result.enqueue(ret).is_err() {
                             defmt::println!("\t\tno queue");
                         }
@@ -866,19 +871,30 @@ impl<'c> Radio<'c> {
                     // Rearmor radio
                     unsafe { self.start_recv() };
                     // dma_start_fence();
-                    // self.radio.tasks_start.write(|w| w.tasks_start().set_bit());                    
-                },
-                RadioWant::ChangeTX => todo!(),
-                RadioWant::ChangeRX => todo!(),
+                    // self.radio.tasks_start.write(|w| w.tasks_start().set_bit());
+                }
+                RadioWant::ChangeTX | RadioWant::ChangeRX => todo!(),
             }
         }
-        if self.radio.events_rxready.read().events_rxready().bit_is_set() {
+        if self
+            .radio
+            .events_rxready
+            .read()
+            .events_rxready()
+            .bit_is_set()
+        {
             self.radio.events_rxready.reset();
             defmt::println!("\tRX Ready");
 
             self.radio.shorts.reset();
         }
-        if self.radio.events_txready.read().events_txready().bit_is_set() {
+        if self
+            .radio
+            .events_txready
+            .read()
+            .events_txready()
+            .bit_is_set()
+        {
             self.radio.events_txready.reset();
             defmt::println!("\tTX Ready");
 
@@ -887,7 +903,9 @@ impl<'c> Radio<'c> {
             self.radio.shorts.reset();
 
             defmt::println!("Radio RXSwitch");
-            unsafe { self.start_recv(); }                    
+            unsafe {
+                self.start_recv();
+            }
 
             self.state = RadioWant::RX;
         }
@@ -895,7 +913,7 @@ impl<'c> Radio<'c> {
 }
 
 /// Error
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Error {
     /// Incorrect CRC
     Crc(u16),
@@ -939,8 +957,8 @@ enum Event {
 /// The API lets users modify the usable part (not the CRC) of the PSDU via the `deref` and
 /// `copy_from_slice` methods. These methods will automatically update the PHR.
 ///
-/// See figure 119 in the Product Specification of the nRF52840 for more details
-/// 
+/// See figure 119 in the Product Specification of the `nRF52840` for more details
+///
 
 #[derive(Clone, Copy, defmt::Format, Debug)]
 pub struct Packet {
@@ -975,10 +993,10 @@ impl Packet {
     ///
     /// This function panics if `src` is larger than `Self::CAPACITY`
     pub fn copy_from_slice(&mut self, src: &[u8]) {
-        assert!(src.len() <= Self::CAPACITY as usize);
-        let len = src.len() as u8;
-        self.buffer[Self::DATA][..len as usize].copy_from_slice(&src[..len.into()]);
-        self.set_len(len);
+        assert!(src.len() <= usize::from(Self::CAPACITY));
+        let len = src.len();
+        self.buffer[Self::DATA][..len].copy_from_slice(&src[..len]);
+        self.set_len(u8::try_from(len).unwrap());
     }
 
     /// Returns the size of this packet's payload
@@ -989,10 +1007,10 @@ impl Packet {
     /// Returns the size of this packet's payload
     pub fn rx_len(&self) -> u8 {
         self.buffer[1]
-    }    
+    }
 
     pub fn rx_data(&self) -> &[u8] {
-        &self.buffer[1..1+self.rx_len() as usize]
+        &self.buffer[1..=usize::from(self.rx_len())]
     }
 
     /// Changes the size of the packet's payload
@@ -1034,4 +1052,3 @@ impl ops::DerefMut for Packet {
         &mut self.buffer[Self::DATA][..len as usize]
     }
 }
-
