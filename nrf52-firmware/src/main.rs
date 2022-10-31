@@ -27,8 +27,8 @@ use ieee802154::{Channel, Packet, Radio, RadioReturn};
 
 use hal::{
     clocks::{ExternalOscillator, Internal, LfOscStopped},
-    gpio::{Level, Output, Pin, PushPull},
-    pac::PWM0,
+    gpio::{Level, Output, Pin, PushPull, Input, PullUp, Floating},
+    pac::{PWM0, UICR},
     //pac::PWM0, TIMER1,
     pwm::{self, LoadMode, Prescaler, Pwm, PwmEvent, PwmSeq, Seq},
     usbd::{UsbPeripheral, Usbd},
@@ -224,7 +224,7 @@ type SeqBuffer = &'static mut [u16; PWM_DMA_MEM_SIZE];
 mod app {
     use defmt::println;
     use nrf52840_hal::prelude::StatefulOutputPin;
-    use hal::pac::{TIMER0, TIMER1};
+    use hal::pac::{TIMER0, TIMER1, UICR};
 
     use super::{
         hal, ieee802154, pwm, uart_protocol, Channel, Commands, Consumer, DefaultBufferStore,
@@ -233,7 +233,7 @@ mod app {
         Radio, RadioAction, RadioReturn, Responce, Seq, SeqBuffer, SerialPort, State, StopWatch,
         TryFrom, UsbBus, UsbBusAllocator, UsbDevice, UsbDeviceBuilder, UsbPeripheral, UsbVidPid,
         Usbd, B, FRAMEBUFFER, G, LEDMAX, N_BYTES, N_LEDS, PWM0, PWM_DMA_MEM_SIZE, PWM_MAX, PWM_POL,
-        R, TOTAL_BYTES, USB_CLASS_CDC,
+        R, TOTAL_BYTES, USB_CLASS_CDC, PullUp, Input, Floating, 
     };
 
     #[shared]
@@ -304,6 +304,11 @@ mod app {
 
         let port0 = hal::gpio::p0::Parts::new(ctx.device.P0);
 
+        let mut bla = ctx.device.UICR; 
+
+        bla.pselreset[0].write(|w| unsafe { w.bits(0xFFFF_FFFF) });
+        bla.pselreset[1].write(|w| unsafe { w.bits(0xFFFF_FFFF) });
+
         let mut red_led = port0.p0_23.into_push_pull_output(Level::Low).degrade();
         let mut blue_led = port0.p0_24.into_push_pull_output(Level::Low).degrade();
         let mut green_led = port0.p0_22.into_push_pull_output(Level::High).degrade();
@@ -311,7 +316,7 @@ mod app {
         let pin_debug = port0.p0_06.into_push_pull_output(Level::Low).degrade();
         let pin_update = port0.p0_07.into_push_pull_output(Level::Low).degrade();
 
-        *ctx.local.usbbus = Some(Usbd::new(UsbPeripheral::new(ctx.device.USBD, clock)));
+        *ctx.local.usbbus = Some(UsbBusAllocator::new(Usbd::new(UsbPeripheral::new(ctx.device.USBD, clock))));
 
         let usb_bus = ctx.local.usbbus.as_ref().unwrap();
 
