@@ -27,8 +27,8 @@ use ieee802154::{Channel, Packet, Radio, RadioReturn};
 
 use hal::{
     clocks::{ExternalOscillator, Internal, LfOscStopped},
-    gpio::{Level, Output, Pin, PushPull, Input, PullUp, Floating},
-    pac::{PWM0, UICR},
+    gpio::{Level, Output, Pin, PushPull},
+    pac::PWM0,
     //pac::PWM0, TIMER1,
     pwm::{self, LoadMode, Prescaler, Pwm, PwmEvent, PwmSeq, Seq},
     usbd::{UsbPeripheral, Usbd},
@@ -223,17 +223,17 @@ type SeqBuffer = &'static mut [u16; PWM_DMA_MEM_SIZE];
 #[rtic::app(device = crate::hal::pac, peripherals = true, dispatchers = [SWI0_EGU0, SWI1_EGU1, SWI2_EGU2, SWI3_EGU3])]
 mod app {
     use defmt::println;
+    use hal::pac::{TIMER0, TIMER1};
     use nrf52840_hal::prelude::StatefulOutputPin;
-    use hal::pac::{TIMER0, TIMER1, UICR};
 
     use super::{
         hal, ieee802154, pwm, uart_protocol, Channel, Commands, Consumer, DefaultBufferStore,
         ExternalOscillator, Frame, Internal, Led, Level, LfOscStopped, LoadMode, Output, OutputPin,
-        Packet, Pin, Pool, Prescaler, Producer, PushPull, Pwm, PwmData, PwmEvent, PwmSeq, Queue,
-        Radio, RadioAction, RadioReturn, Responce, Seq, SeqBuffer, SerialPort, State, StopWatch,
-        TryFrom, UsbBus, UsbBusAllocator, UsbDevice, UsbDeviceBuilder, UsbPeripheral, UsbVidPid,
-        Usbd, B, FRAMEBUFFER, G, LEDMAX, N_BYTES, N_LEDS, PWM0, PWM_DMA_MEM_SIZE, PWM_MAX, PWM_POL,
-        R, TOTAL_BYTES, USB_CLASS_CDC, PullUp, Input, Floating, 
+        Packet, Pin, Prescaler, Producer, PushPull, Pwm, PwmData, PwmEvent, PwmSeq, Queue, Radio,
+        RadioAction, RadioReturn, Responce, Seq, SeqBuffer, SerialPort, State, StopWatch, TryFrom,
+        UsbBus, UsbBusAllocator, UsbDevice, UsbDeviceBuilder, UsbPeripheral, UsbVidPid, Usbd, B,
+        FRAMEBUFFER, G, LEDMAX, N_BYTES, N_LEDS, PWM0, PWM_DMA_MEM_SIZE, PWM_MAX, PWM_POL, R,
+        TOTAL_BYTES, USB_CLASS_CDC, Pool,
     };
 
     #[shared]
@@ -304,7 +304,7 @@ mod app {
 
         let port0 = hal::gpio::p0::Parts::new(ctx.device.P0);
 
-        let mut bla = ctx.device.UICR; 
+        let bla = ctx.device.UICR;
 
         bla.pselreset[0].write(|w| unsafe { w.bits(0xFFFF_FFFF) });
         bla.pselreset[1].write(|w| unsafe { w.bits(0xFFFF_FFFF) });
@@ -316,7 +316,10 @@ mod app {
         let pin_debug = port0.p0_06.into_push_pull_output(Level::Low).degrade();
         let pin_update = port0.p0_07.into_push_pull_output(Level::Low).degrade();
 
-        *ctx.local.usbbus = Some(UsbBusAllocator::new(Usbd::new(UsbPeripheral::new(ctx.device.USBD, clock))));
+        *ctx.local.usbbus = Some(UsbBusAllocator::new(Usbd::new(UsbPeripheral::new(
+            ctx.device.USBD,
+            clock,
+        ))));
 
         let usb_bus = ctx.local.usbbus.as_ref().unwrap();
 
@@ -853,12 +856,11 @@ mod app {
             let q = *c;
             println!("IDLE: {=usize}", q);
             *c = 0;
-            
         });
 
         let led = ctx.local.led_gr;
 
-        if led.is_set_low().unwrap() {            
+        if led.is_set_low().unwrap() {
             led.set_high().unwrap();
         } else {
             led.set_low().unwrap();
@@ -870,7 +872,6 @@ mod app {
         let TICK = ctx.local.tick;
 
         ctx.local.tmr0.reset_event(0);
-
 
         let ser_buf = ctx.local.ser_buf_consumer;
         let timeout = ctx.local.timeout;

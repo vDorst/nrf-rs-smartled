@@ -758,8 +758,12 @@ impl<'c> Radio<'c> {
         match self.radio.state.read().state().variant().unwrap() {
             // final states
             STATE_A::DISABLED => State::Disabled,
-            STATE_A::TX_IDLE |STATE_A::TX => State::TxIdle,
-            STATE_A::RX_IDLE| STATE_A::RX | STATE_A::RX_RU | STATE_A::RX_DISABLE | STATE_A::TX_RU => State::RxIdle,
+            STATE_A::TX_IDLE | STATE_A::TX => State::TxIdle,
+            STATE_A::RX_IDLE
+            | STATE_A::RX
+            | STATE_A::RX_RU
+            | STATE_A::RX_DISABLE
+            | STATE_A::TX_RU => State::RxIdle,
 
             // transitory states
             STATE_A::TX_DISABLE => {
