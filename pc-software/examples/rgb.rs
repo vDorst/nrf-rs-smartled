@@ -2,19 +2,17 @@ use crossterm::event::{KeyEventKind, KeyEventState};
 use rand::{self, Rng};
 use uart_protocol::Commands;
 
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-use crossterm::{
-    event::{
-        read, Event,
-        KeyCode::{self, Char},
-        KeyEvent, KeyModifiers,
-    },
+use crossterm::event::{
+    read, Event,
+    KeyCode::{self, Char},
+    KeyEvent, KeyModifiers,
 };
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
 use pc_software::UartLeds;
 use rgb::{self, ComponentBytes, RGB8};
 
-const N_LEDS: usize = 64;
+const N_LEDS: usize = 300;
 const COLMAX: usize = 15;
 const BRIGHTMAX: usize = 4;
 
@@ -46,7 +44,7 @@ fn dim(led: &mut RGB8, bright: usize) {
 }
 
 fn main() -> crossterm::Result<()> {
-    let mut port = UartLeds::new("/dev/ttyACM2").unwrap();
+    let mut port = UartLeds::new(None).unwrap();
 
     // Clear all leds
     let buf: [RGB8; 150] = [RGB8::default(); 150];

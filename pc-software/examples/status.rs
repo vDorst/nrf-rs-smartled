@@ -1,8 +1,8 @@
 use crossbeam_channel::bounded;
 
 //use byte::BytesExt;
-use crossterm::event::{KeyModifiers, KeyEventKind, KeyEventState};
 use crossterm::event::{poll, read, Event, KeyCode::Char, KeyEvent};
+use crossterm::event::{KeyEventKind, KeyEventState, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 // use ieee802154::mac::{
 //     Address, FooterMode, Frame, FrameSerDesContext, FrameType, PanId, ShortAddress,
@@ -15,21 +15,20 @@ use psila_data::application_service::ApplicationServiceHeader;
 use psila_data::cluster_library::AttributeDataType;
 //use psila_data::pack::Pack;
 //use psila_data::security::CryptoProvider;
-use psila_service::{PsilaService, ClusterLibraryHandler};
+use psila_service::{ClusterLibraryHandler, PsilaService};
 use std::fs::File;
 use std::io::{ErrorKind, Write};
-use std::time::{SystemTime, Duration};
 use std::thread;
+use std::time::{Duration, SystemTime};
 use uart_protocol::Responce;
 
 // use psila_data::network::{NetworkHeader, };
 
 // use psila_crypto::CryptoBackend;
-use psila_crypto_rust_crypto::RustCryptoBackend;
 use bbqueue::BBBuffer;
+use psila_crypto_rust_crypto::RustCryptoBackend;
 
 use std::thread::sleep;
-
 
 fn hex_to_bytes(s: &str) -> Option<Vec<u8>> {
     if s.len() % 2 == 0 {
@@ -51,7 +50,7 @@ fn bytes_to_wireshark_hex(data: &[u8]) -> String {
 
     hs.push('\n');
     hs.push('\r');
-    
+
     for (addr, d) in data.iter().enumerate() {
         if addr & 0xF == 0 {
             hs.push_str(format!("{:04x}:\t ", addr).as_str());
@@ -119,12 +118,15 @@ impl Device {
     }
 }
 
-impl ClusterLibraryHandler for Device  {
+impl ClusterLibraryHandler for Device {
     fn active_endpoints(&self) -> &[u8] {
         todo!()
     }
 
-    fn get_simple_desciptor(&self, endpoint: u8) -> Option<psila_data::device_profile::SimpleDescriptor> {
+    fn get_simple_desciptor(
+        &self,
+        endpoint: u8,
+    ) -> Option<psila_data::device_profile::SimpleDescriptor> {
         todo!()
     }
 
@@ -135,7 +137,10 @@ impl ClusterLibraryHandler for Device  {
         endpoint: u8,
         attribute: u16,
         value: &mut [u8],
-    ) -> Result<(psila_data::cluster_library::AttributeDataType, usize), psila_data::cluster_library::ClusterLibraryStatus> {
+    ) -> Result<
+        (psila_data::cluster_library::AttributeDataType, usize),
+        psila_data::cluster_library::ClusterLibraryStatus,
+    > {
         todo!()
     }
 
@@ -161,7 +166,7 @@ impl ClusterLibraryHandler for Device  {
     ) -> Result<(), psila_data::cluster_library::ClusterLibraryStatus> {
         todo!()
     }
-    // 
+    //
 }
 
 enum ThreadAction {
@@ -170,28 +175,34 @@ enum ThreadAction {
 }
 
 fn main() -> crossterm::Result<()> {
-    let crypto= RustCryptoBackend::default();
+    let crypto = RustCryptoBackend::default();
     let mut packet = Vec::<u8>::with_capacity(127);
 
     static bbq: BBBuffer<1024> = BBBuffer::<1024>::new();
-    
+
     let (tx_queue, mut rx_queue) = bbq.try_split().unwrap();
-    
+
     let address = ExtendedAddress::new(0x1234_1234_1234_1234);
     let default_link_key = Key::from([
-        0xf0, 0xe1, 0xd2, 0xc3, 0xb4, 0xa5, 0x96, 0x87, 0x78, 0x69, 0x5a, 0x4b, 0x3c, 0x2d,
-        0x1e, 0x0f,
+        0xf0, 0xe1, 0xd2, 0xc3, 0xb4, 0xa5, 0x96, 0x87, 0x78, 0x69, 0x5a, 0x4b, 0x3c, 0x2d, 0x1e,
+        0x0f,
     ]);
 
     let cluser_library_handler = Device::new();
 
-    let mut ps = PsilaService::new(crypto, tx_queue, address, default_link_key, cluser_library_handler);
+    let mut ps = PsilaService::new(
+        crypto,
+        tx_queue,
+        address,
+        default_link_key,
+        cluser_library_handler,
+    );
 
     // let path = "/tmp/ws";
 
     // let mut f = File::open(path).unwrap();
 
-    let mut port = UartLeds::new("/dev/ttyACM0").unwrap();
+    let mut port = UartLeds::new(None).unwrap();
     let time_delay = Duration::from_millis(50);
 
     let _ = port.restore_program();
@@ -230,7 +241,6 @@ fn main() -> crossterm::Result<()> {
                         };
 
                         println!("\r\tRECV: {:?}: {}", ps.receive(timestamp, d), hs);
-
                     }
                     r => println!("r: {:?}", r),
                 },
@@ -241,21 +251,28 @@ fn main() -> crossterm::Result<()> {
                     println!("SE: {:?}", e);
                     break 'lus;
                 }
-            } 
+            }
             thread::sleep(time_delay);
-            
 
-            if let  Ok( data) =  rx_queue.read() {
-                println!("\r\tTX: {:?} {:?}", port.write_command(&uart_protocol::Commands::RadioSend(&data[1..])), data);
-                      
+            if let Ok(data) = rx_queue.read() {
+                println!(
+                    "\r\tTX: {:?} {:?}",
+                    port.write_command(&uart_protocol::Commands::RadioSend(&data[1..])),
+                    data
+                );
+
                 // println!("{:?}", bytes_to_wireshark_hex(&data.as_bytes()));
                 let l = data.len();
-                data.release(l );
-            } else { 
+                data.release(l);
+            } else {
                 let _ = ps.update(timestamp);
                 if packet.len() != 0 {
                     let data = packet.as_bytes();
-                    println!("\r\tTX: {:?} {:?}", port.write_command(&uart_protocol::Commands::RadioSend(&data)), data);
+                    println!(
+                        "\r\tTX: {:?} {:?}",
+                        port.write_command(&uart_protocol::Commands::RadioSend(&data)),
+                        data
+                    );
                     packet.clear();
                 }
             }
@@ -308,9 +325,11 @@ fn main() -> crossterm::Result<()> {
                                         break;
                                     }
                                 }
-                                Char('b') => if s.send(ThreadAction::RadioBeacon).is_err() {
-                                    break;
-                                },
+                                Char('b') => {
+                                    if s.send(ThreadAction::RadioBeacon).is_err() {
+                                        break;
+                                    }
+                                }
                                 Char('q') => break,
                                 _ => (),
                             }

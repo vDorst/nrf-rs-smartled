@@ -8,7 +8,7 @@ use std::{thread, time::Duration};
 
 use pc_software::UartLeds;
 
-const N_LEDS: usize = 64;
+const N_LEDS: usize = 300;
 const BUF_LEN: usize = N_LEDS * 3;
 
 fn effect(led: &mut u8) {
@@ -30,7 +30,7 @@ fn main() {
     signal_hook::flag::register(SIGINT, Arc::clone(&term)).unwrap();
     let mut buf = [01u8; BUF_LEN];
 
-    let mut port = UartLeds::new("/dev/ttyACM1").unwrap();
+    let mut port = UartLeds::new(None).unwrap();
 
     let time_delay = Duration::from_millis(1000);
 

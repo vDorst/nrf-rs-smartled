@@ -1,6 +1,7 @@
 #![deny(clippy::pedantic)]
 #![allow(clippy::missing_errors_doc)]
 
+use dotenv::dotenv;
 use serialport::{self, SerialPort};
 pub use uart_protocol::Programs;
 use uart_protocol::{Commands, Responce};
@@ -15,14 +16,26 @@ pub struct UartLeds {
     ser_buf: [u8; 1024],
 }
 
-
 impl UartLeds {
     /// Creata a new `UartLeds`.
-    /// 
+    ///
     /// # Errors
-    /// 
+    ///
     /// String with the fault
-    pub fn new(port: &str) -> Result<Self, String> {
+    pub fn new(port: Option<&str>) -> Result<Self, String> {
+        let port = match port {
+            Some(port) => port.to_owned(),
+            None => match dotenv() {
+                Ok(_) => {
+                    if let Ok(port) = dotenv::var("PORT") {
+                        port
+                    } else {
+                        return Err("env PORT not set!".to_owned());
+                    }
+                }
+                Err(e) => return Err(format!("Error {e}")),
+            },
+        };
         let ser_dev = match serialport::new(port, 115_200)
             .timeout(Duration::from_millis(100))
             .open()
@@ -43,9 +56,9 @@ impl UartLeds {
     }
 
     /// `set_program` mode in the uC software.
-    /// 
+    ///
     /// # Errors
-    /// 
+    ///
     /// String with the fault
     pub fn set_program(&mut self, prg: Programs) -> Result<Responce, Error> {
         let command = Commands::SetProgram(prg);
@@ -54,9 +67,9 @@ impl UartLeds {
     }
 
     /// `write_bytes` to the uC software.
-    /// 
+    ///
     /// # Errors
-    /// 
+    ///
     /// String with the fault
     pub fn write_bytes(&mut self, bytes: &[u8]) -> Result<Responce, Error> {
         let command = Commands::LedData(bytes);
@@ -65,9 +78,9 @@ impl UartLeds {
     }
 
     /// `write_command` to the uC software.
-    /// 
+    ///
     /// # Errors
-    /// 
+    ///
     /// String with the fault
     pub fn write_command(&mut self, command: &Commands) -> Result<Responce, Error> {
         let data = match command.to_slice(self.ser_buf.as_mut()) {

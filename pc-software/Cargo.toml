@@ -27,6 +27,8 @@ psila-service = { path = "../../psila/psila-service/" }
 psila-crypto-rust-crypto = { path = "../../psila/psila-crypto-rust-crypto/" }
 psila-crypto = { path = "../../psila/psila-crypto/" }
 bbqueue = "0.5"
+dotenv = "0.15"
+heapless = { version = "0.7", features = ["cas"]}
 
 [profile.dev]
 incremental = false

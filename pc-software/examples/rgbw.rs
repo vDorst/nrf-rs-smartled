@@ -4,7 +4,7 @@ use std::{thread, time::Duration};
 use crossterm::event::{
     read, Event,
     KeyCode::{self, Char},
-    KeyEvent, KeyModifiers, KeyEventKind, KeyEventState,
+    KeyEvent, KeyEventKind, KeyEventState, KeyModifiers,
 };
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
@@ -45,7 +45,7 @@ fn dim(led: &mut RGBA8, bright: usize) {
 }
 
 fn main() -> crossterm::Result<()> {
-    let mut port = UartLeds::new("/dev/ttyACM0").unwrap();
+    let mut port = UartLeds::new(None).unwrap();
 
     // Clear all leds
     let buf: [rgb::RGBA8; 150] = [rgb::RGBA8::default(); 150];

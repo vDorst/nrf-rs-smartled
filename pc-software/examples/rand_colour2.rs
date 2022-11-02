@@ -7,7 +7,7 @@ use std::sync::{
 };
 use std::{thread, time::Duration};
 
-const N_LEDS: usize = 64;
+const N_LEDS: usize = 300;
 const BUF_LEN: usize = N_LEDS * 3;
 
 fn effect(led: &mut u8) {
@@ -32,7 +32,7 @@ fn main() {
 
     let mut rng = rand::thread_rng();
 
-    let mut port = UartLeds::new("/dev/ttyACM1").unwrap();
+    let mut port = UartLeds::new(None).unwrap();
 
     let time_delay = Duration::from_millis(25);
 

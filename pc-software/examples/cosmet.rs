@@ -22,7 +22,7 @@ fn main() {
 
     let mut buf = [0u8; N_LEDS * 3];
 
-    let mut port = UartLeds::new("/dev/ttyACM0").unwrap();
+    let mut port = UartLeds::new(None).unwrap();
     let time_delay = Duration::from_millis(20);
 
     //rand::thread_rng().fill_bytes(&mut buf);

@@ -18,7 +18,7 @@ const UPDATE: u8 = 2;
 fn main() {
     let mut buf = [0x01_u8; N_LEDS * 3];
 
-    let mut port = UartLeds::new("/dev/ttyACM0").unwrap();
+    let mut port = UartLeds::new(None).unwrap();
 
     let time_delay = Duration::from_millis(25);
 

@@ -93,7 +93,7 @@ fn main() {
         panic!("Please provide --photo, --text or --fire");
     };
 
-    let mut port = UartLeds::new("/dev/ttyACM0").unwrap();
+    let mut port = UartLeds::new(None).unwrap();
 
     let mut buf = [0x1Fu8; N_LEDS * 3];
 

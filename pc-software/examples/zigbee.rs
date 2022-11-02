@@ -1,7 +1,7 @@
 use crossbeam_channel::bounded;
 
-use crossterm::event::{KeyModifiers, KeyEventKind, KeyEventState};
 use crossterm::event::{poll, read, Event, KeyCode::Char, KeyEvent};
+use crossterm::event::{KeyEventKind, KeyEventState, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use pc_software::UartLeds;
 use rand::{self, Rng};
@@ -21,7 +21,7 @@ fn effect(led: &mut u8) {
 fn main() -> crossterm::Result<()> {
     let mut buf = [0u8; N_LEDS * 3];
 
-    let mut port = UartLeds::new("/dev/ttyACM0").unwrap();
+    let mut port = UartLeds::new(None).unwrap();
     let time_delay = Duration::from_millis(25);
 
     // let time_delay_update = Duration::from_millis(2000);
