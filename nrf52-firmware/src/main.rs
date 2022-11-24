@@ -27,7 +27,7 @@ use ieee802154::{Channel, Packet, Radio, RadioReturn};
 
 use hal::{
     clocks::{ExternalOscillator, Internal, LfOscStopped},
-    gpio::{Level, Output, Pin, PushPull},
+    gpio::{Input, Level, Output, Pin, PullUp, PushPull},
     pac::PWM0,
     //pac::PWM0, TIMER1,
     pwm::{self, LoadMode, Prescaler, Pwm, PwmEvent, PwmSeq, Seq},
@@ -63,6 +63,16 @@ const PWM_POL: u16 = 0x8000;
 const PWM_T0H: u16 = 6 | PWM_POL;
 const PWM_T1H: u16 = 13 | PWM_POL;
 const PWM_MAX: u16 = 20;
+
+
+fn itoa(s: &mut heapless::String<10>, input: u32) {
+    if input >= 10 {
+        itoa(s, input / 10);
+    }
+    let c = (input % 10) + b'0' as u32;
+    let cr = char::from_u32(c).unwrap();
+    s.push(cr).unwrap();
+}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Led {
@@ -220,33 +230,44 @@ type UsbBus = Usbd<UsbPeripheral<'static>>;
 const PWM_DMA_MEM_SIZE: usize = PWM_N_LEDS * N_BYTES * 8 + 1;
 type SeqBuffer = &'static mut [u16; PWM_DMA_MEM_SIZE];
 
+
+const PATTERN: &[u8; 102] = &[
+    28, 36, 35, 27, 19, 20, 21, 29, 37, 45, 44, 43, 42, 34, 26, 18, 10, 11, 12, 13, 14, 22, 30, 38,
+    46, 54, 53, 52, 51, 50, 49, 41, 33, 25, 17, 9, 1, 2, 3, 4, 5, 6, 7, 15, 23, 31, 39, 47, 55, 63,
+    62, 61, 60, 59, 58, 57, 56, 48, 40, 32, 24, 16, 8, 0, 1, 2, 3, 4, 5, 6, 14, 22, 30, 38, 46, 54,
+    53, 52, 51, 50, 49, 41, 33, 25, 17, 9, 10, 11, 12, 13, 21, 29, 37, 45, 44, 43, 42, 34, 26, 18,
+    19, 20,
+];
+
+mod leds;
+
 #[rtic::app(device = crate::hal::pac, peripherals = true, dispatchers = [SWI0_EGU0, SWI1_EGU1, SWI2_EGU2, SWI3_EGU3])]
 mod app {
     use defmt::println;
-    use hal::pac::{TIMER0, TIMER1};
-    use nrf52840_hal::prelude::StatefulOutputPin;
+    use hal::pac::{TIMER0, TIMER1, SPIM0};
+    use hal::spim::Spim;
+    use nrf52840_hal::prelude::{StatefulOutputPin, InputPin};
 
     use super::{
         hal, ieee802154, pwm, uart_protocol, Channel, Commands, Consumer, DefaultBufferStore,
-        ExternalOscillator, Frame, Internal, Led, Level, LfOscStopped, LoadMode, Output, OutputPin,
-        Packet, Pin, Prescaler, Producer, PushPull, Pwm, PwmData, PwmEvent, PwmSeq, Queue, Radio,
-        RadioAction, RadioReturn, Responce, Seq, SeqBuffer, SerialPort, State, StopWatch, TryFrom,
-        UsbBus, UsbBusAllocator, UsbDevice, UsbDeviceBuilder, UsbPeripheral, UsbVidPid, Usbd, B,
-        FRAMEBUFFER, G, LEDMAX, N_BYTES, N_LEDS, PWM0, PWM_DMA_MEM_SIZE, PWM_MAX, PWM_POL, R,
-        TOTAL_BYTES, USB_CLASS_CDC, Pool,
+        ExternalOscillator, Frame, Input, Internal, Led, Level, LfOscStopped, LoadMode, Output,
+        OutputPin, Packet, Pin, Pool, Prescaler, Producer, PullUp, PushPull, Pwm, PwmData,
+        PwmEvent, PwmSeq, Queue, Radio, RadioAction, RadioReturn, Responce, Seq, SeqBuffer,
+        SerialPort, State, StopWatch, TryFrom, UsbBus, UsbBusAllocator, UsbDevice,
+        UsbDeviceBuilder, UsbPeripheral, UsbVidPid, Usbd, B, FRAMEBUFFER, G, LEDMAX, N_BYTES,
+        N_LEDS, PWM0, PWM_DMA_MEM_SIZE, PWM_MAX, PWM_POL, R, TOTAL_BYTES, USB_CLASS_CDC, itoa,
+        PATTERN, leds,
     };
 
-    #[shared]
-    struct Shared {
-        // packet_buf: ringbuffer::ConstGenericRingBuffer<Packet, 4>,
-        #[lock_free]
-        pwm: Option<PwmSeq<PWM0, SeqBuffer, SeqBuffer>>,
-        // tmr1: Timer<TIMER1>,
-        #[lock_free]
-        radio: Option<Radio<'static>>,
-        program: uart_protocol::Programs,
-        idle_counter: usize,
-    }
+    use leds::{GRB, any_as_u8_slice};
+
+    use embedded_graphics::{
+        mono_font::{ascii, MonoTextStyleBuilder},
+        pixelcolor::BinaryColor,
+        prelude::*,
+        text::{Baseline, Text},
+    };
+    use ssd1306::{prelude::*, Ssd1306, mode::BufferedGraphicsMode};
 
     #[local]
     struct Local {
@@ -260,10 +281,25 @@ mod app {
         rxrf_buf_consumer: Consumer<'static, RadioReturn, 4>,
         tmr0: StopWatch<TIMER0>,
         led_gr: Pin<Output<PushPull>>,
+        led_red: Pin<Output<PushPull>>,
         // `_led_bl: Pin<Output<PushPull>>,
         debug_pin: Pin<Output<PushPull>>,
         update_pin: Pin<Output<PushPull>>,
         tmr1: StopWatch<TIMER1>,
+        display: Ssd1306<SPIInterface<Spim<SPIM0>, Pin<Output<PushPull>>, Pin<Output<PushPull>>>, DisplaySize128x64, BufferedGraphicsMode<DisplaySize128x64>>,
+        button: Pin<Input<PullUp>>,
+    }
+
+    #[shared]
+    struct Shared {
+        // packet_buf: ringbuffer::ConstGenericRingBuffer<Packet, 4>,
+        #[lock_free]
+        pwm: Option<PwmSeq<PWM0, SeqBuffer, SeqBuffer>>,
+        // tmr1: Timer<TIMER1>,
+        #[lock_free]
+        radio: Option<Radio<'static>>,
+        program: uart_protocol::Programs,
+        idle_counter: usize,
     }
 
     #[init(local = [memory: [u8; 4096] = [0; 4096], rxrf_buf: Queue<Packet, 4> = Queue::new(), led_buf: Queue<PwmData, 4> = Queue::new(), ser_buf: Queue<PwmData, 4> = Queue::new(), radio_buf: Queue<ieee802154::RadioReturn, 4> = Queue::new(), usbbus: Option<UsbBusAllocator<UsbBus>> = None, clock: Option<hal::clocks::Clocks<ExternalOscillator, Internal, LfOscStopped>> =
@@ -313,8 +349,8 @@ mod app {
         let mut blue_led = port0.p0_24.into_push_pull_output(Level::Low).degrade();
         let mut green_led = port0.p0_22.into_push_pull_output(Level::High).degrade();
 
-        let pin_debug = port0.p0_06.into_push_pull_output(Level::Low).degrade();
-        let pin_update = port0.p0_07.into_push_pull_output(Level::Low).degrade();
+        let pin_debug = port0.p0_19.into_push_pull_output(Level::Low).degrade();
+        let pin_update = port0.p0_20.into_push_pull_output(Level::Low).degrade();
 
         *ctx.local.usbbus = Some(UsbBusAllocator::new(Usbd::new(UsbPeripheral::new(
             ctx.device.USBD,
@@ -393,6 +429,75 @@ mod app {
         let (ser_buf_producer, ser_buf_consumer) = ctx.local.ser_buf.split();
         // let (rxrf_buf_producer, rxrf_buf_consumer) = ctx.local.rxrf_buf.split();
 
+        // Button
+        let button = port0.p0_03.into_pullup_input().degrade();
+
+        // OLED/SPI Setup
+        let lcd_spi_clk = port0.p0_10.into_push_pull_output(Level::Low).degrade();
+        let lcd_spi_mosi = port0.p0_09.into_push_pull_output(Level::Low).degrade();
+        let lcd_spi_cs = port0.p0_07.into_push_pull_output(Level::High).degrade();
+        let lcd_rst = port0.p0_06.into_push_pull_output(Level::High).degrade();
+        let lcd_spi_dcx = port0.p0_08.into_push_pull_output(Level::High).degrade();
+
+        let pins = hal::spim::Pins {
+            sck: Some(lcd_spi_clk),
+            miso: None,
+            mosi: Some(lcd_spi_mosi),
+        };
+
+        let spi = hal::Spim::new(
+            ctx.device.SPIM0,
+            pins,
+            hal::spim::Frequency::K500,
+            hal::spim::MODE_0,
+            0,
+        );
+
+        let interface = SPIInterface::new(spi, lcd_spi_dcx, lcd_spi_cs);
+        let mut display = Ssd1306::new(interface, DisplaySize128x64, DisplayRotation::Rotate0)
+            .into_buffered_graphics_mode();
+        // display
+        display.init().unwrap();
+
+        let text_style = MonoTextStyleBuilder::new()
+            .font(&ascii::FONT_9X15)
+            .text_color(BinaryColor::On)
+            .background_color(BinaryColor::Off)
+            .build();
+
+        let text_style_invert = MonoTextStyleBuilder::new()
+            .font(&ascii::FONT_9X15)
+            .text_color(BinaryColor::Off)
+            .background_color(BinaryColor::On)
+            .build();
+
+        Text::with_baseline("Hello world!", Point::zero(), text_style, Baseline::Top)
+            .draw(&mut display)
+            .unwrap();
+
+        Text::with_baseline("Hello Rust!", Point::new(0, 16), text_style, Baseline::Top)
+            .draw(&mut display)
+            .unwrap();
+
+        Text::with_baseline(
+            "Hello Rust!",
+            Point::new(32, 16),
+            text_style_invert,
+            Baseline::Top,
+        )
+        .draw(&mut display)
+        .unwrap();
+
+        Text::with_baseline("Hello world!", Point::new(0, 32), text_style, Baseline::Top)
+            .draw(&mut display)
+            .unwrap();
+        Text::with_baseline("Hello world!", Point::new(0, 48), text_style, Baseline::Top)
+            .draw(&mut display)
+            .unwrap();
+
+        display.set_pixel(127, 63, true);
+        display.flush().unwrap();
+
         (
             Shared {
                 // packet_buf: PACKET_BUF,
@@ -412,10 +517,13 @@ mod app {
                 usb_device,
                 usb_serial,
                 led_gr: green_led,
+                led_red: red_led,
                 tmr0,
                 debug_pin: pin_debug,
                 update_pin: pin_update,
                 tmr1,
+                display,
+                button,
             },
             init::Monotonics(),
         )
@@ -594,111 +702,47 @@ mod app {
         }
     }
 
-    #[task(local = [buf: [u8; TOTAL_BYTES] = [0u8; TOTAL_BYTES], state: State = State::R_UP, tick: u8 = 0])]
+    #[task(local = [buf: [GRB; 64] = [GRB { r: 0, g: 0, b: 0}; 64], tick: u8 = 0, state: u8 = 0, col: u8 = 0])]
     fn program_loop_two(ctx: program_loop_two::Context) {
         let BUF = ctx.local.buf;
         let STATE = ctx.local.state;
         let TICK = ctx.local.tick;
+        let COL = ctx.local.col;
 
         const STEP_SIZE: u8 = 10;
 
         if let Some(mut buf) = Frame::new() {
-            // move BUFfer to the right
-            for i in (0..BUF.len() - N_BYTES).rev() {
-                BUF[i + N_BYTES] = BUF[i];
+            *STATE += 1;
+            if usize::from(*STATE) == PATTERN.len() { *COL += 1; *STATE = 0 };
+            if *COL == 9 { *COL = 0 };
+            let loc = PATTERN[usize::from(*STATE)];
+
+            for d in BUF.iter_mut() {
+                d.effect();
             }
 
-            // Render new colour
-            if *TICK == 0 {
-                *TICK = 10;
-                match STATE {
-                    State::R_UP => {
-                        // R UP, B FULL
-                        BUF[R] = if BUF[R] >= (LEDMAX - STEP_SIZE) {
-                            LEDMAX
-                        } else {
-                            BUF[R] + STEP_SIZE
-                        };
-                        BUF[B] = LEDMAX - BUF[R];
-                        if BUF[1] >= LEDMAX << 1 {
-                            // This check is needed because at startup Blue value = 0.
-                            // The causes BUF[2] to underflow in B_DOWN.
-                            // Just skip it, go stread to G_UP
-                            // *STATE = if BUF[2] != 0 {
-                            //     State::B_DOWN
-                            // } else {
-                            //     State::G_UP
-                            // };
-                            *STATE = State::B_DOWN;
-                        }
-                    }
-                    State::B_DOWN => {
-                        // B DOWN, R FULL
-                        BUF[B] = if BUF[B] <= STEP_SIZE {
-                            0
-                        } else {
-                            BUF[B] - STEP_SIZE
-                        };
-                        BUF[R] = LEDMAX - BUF[B];
-                        if BUF[B] == 0 {
-                            *STATE = State::G_UP;
-                        }
-                    }
-                    State::G_UP => {
-                        // G UP, R FULL
-                        BUF[G] = if BUF[G] >= (LEDMAX - STEP_SIZE) {
-                            LEDMAX
-                        } else {
-                            BUF[G] + STEP_SIZE
-                        };
-                        BUF[R] = LEDMAX - BUF[G];
-                        if BUF[G] >= LEDMAX << 1 {
-                            *STATE = State::R_DOWN;
-                        }
-                    }
-                    State::R_DOWN => {
-                        // R DOWN, G FULL
-                        BUF[R] = if BUF[R] <= STEP_SIZE {
-                            0
-                        } else {
-                            BUF[R] - STEP_SIZE
-                        };
-                        BUF[G] = LEDMAX - BUF[R];
-                        if BUF[R] == 0 {
-                            *STATE = State::B_UP;
-                        }
-                    }
-                    State::B_UP => {
-                        // B UP, G FULL
-                        BUF[B] = if BUF[B] >= (LEDMAX - STEP_SIZE) {
-                            LEDMAX
-                        } else {
-                            BUF[B] + STEP_SIZE
-                        };
-                        BUF[G] = LEDMAX - BUF[B];
-                        if BUF[B] >= LEDMAX << 1 {
-                            *STATE = State::G_DOWN;
-                        }
-                    }
-                    State::G_DOWN => {
-                        // G DOWN, B FULL
-                        BUF[G] = if BUF[G] <= STEP_SIZE {
-                            0
-                        } else {
-                            BUF[G] - STEP_SIZE
-                        };
-                        BUF[B] = LEDMAX - BUF[G];
-                        if BUF[G] == 0 {
-                            *STATE = State::R_UP;
-                        }
-                    }
-                }
-                // rprintln!("{:?}: {} {} {}", *STATE, BUF[G], BUF[R], BUF[B]);
-            } else {
-                *TICK -= 1;
-            }
+            let pos = usize::from(loc);
 
-            if buf.copy_from_slice(&BUF[..]) {
+            const D: u8 = 0x10;
+
+            let pixel = match *COL {
+                0 => &[255, 0, 0],
+                1 => &[0, 255, 0],
+                2 => &[0, 0, 255],
+                3 => &[D, D, 0],
+                4 => &[D, 0, D],
+                5 => &[0, D, D],
+                6 => &[0xAF, 255, 0xF],
+                7 => &[0xFF, 0xFF, 0xFF],
+                8 => &[0x1F, 0xFF, 0x1F],
+                _ => unreachable!("Error!"),
+            };
+
+            BUF[pos] = GRB::from_bytes(pixel);
+
+            let refbuf = unsafe { any_as_u8_slice(BUF) };
+
+            if buf.copy_from_slice(&refbuf[..]) {
                 // Push
                 pwm_enqueue::spawn(buf).ok();
             } else {
@@ -848,23 +892,73 @@ mod app {
         }
     }
 
-    #[task(binds = TIMER1, shared = [idle_counter], local = [tmr1, led_gr])]
+    #[task(binds = TIMER1, shared = [idle_counter, program], local = [tmr1, led_gr, led_red, display, button])]
     fn on_TIMER1(mut ctx: on_TIMER1::Context) {
         ctx.local.tmr1.reset_event(0);
 
+        let mut bla: heapless::String<10> = heapless::String::new();
+   
         ctx.shared.idle_counter.lock(|c| {
             let q = *c;
             println!("IDLE: {=usize}", q);
             *c = 0;
+            itoa(&mut bla, q as u32);
         });
 
         let led = ctx.local.led_gr;
+        let led_red = ctx.local.led_red;
+        let button = ctx.local.button.is_low().unwrap();
+
 
         if led.is_set_low().unwrap() {
             led.set_high().unwrap();
         } else {
             led.set_low().unwrap();
         }
+
+        let display = ctx.local.display;
+
+        let text_style = MonoTextStyleBuilder::new()
+            .font(&ascii::FONT_9X15)
+            .text_color(BinaryColor::Off)
+            .background_color(BinaryColor::On)
+            .build();
+
+        Text::with_baseline(bla.as_str(), Point::new(0, 48), text_style, Baseline::Top)
+            .draw(display)
+            .unwrap();
+
+        if button {
+            led_red.set_high().unwrap();
+
+            bla.clear();
+            bla.push_str("PRG: ");
+
+            ctx.shared.program.lock(|prg| {
+                *prg = match *prg {
+                    uart_protocol::Programs::One => {
+                        bla.push('2');
+                        uart_protocol::Programs::Two
+                    },
+                    uart_protocol::Programs::Two |
+                    uart_protocol::Programs::Serial => {
+                        bla.push('1');
+                        uart_protocol::Programs::One
+                    },
+                };
+
+            });
+
+            Text::with_baseline(&bla, Point::zero(), text_style, Baseline::Top)
+                .draw(display)
+                .unwrap();
+        } else {
+            led_red.set_low().unwrap();            
+        };
+
+        display.flush().unwrap();
+
+
     }
 
     #[task(binds = TIMER0, shared = [program], local = [ser_buf_consumer, tmr0, tick: bool = false, timeout: u16 = 500])]
