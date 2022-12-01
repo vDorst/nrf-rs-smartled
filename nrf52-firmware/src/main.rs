@@ -244,7 +244,7 @@ mod leds;
 #[rtic::app(device = crate::hal::pac, peripherals = true, dispatchers = [SWI0_EGU0, SWI1_EGU1, SWI2_EGU2, SWI3_EGU3])]
 mod app {
     use defmt::println;
-    use hal::pac::{TIMER0, TIMER1, SPIM0};
+    use hal::pac::{TIMER0, TIMER1, TIMER2, SPIM0};
     use hal::spim::Spim;
     use nrf52840_hal::prelude::{StatefulOutputPin, InputPin};
 
@@ -286,6 +286,7 @@ mod app {
         debug_pin: Pin<Output<PushPull>>,
         update_pin: Pin<Output<PushPull>>,
         tmr1: StopWatch<TIMER1>,
+        tmr2: StopWatch<TIMER2>,
         display: Ssd1306<SPIInterface<Spim<SPIM0>, Pin<Output<PushPull>>, Pin<Output<PushPull>>>, DisplaySize128x64, BufferedGraphicsMode<DisplaySize128x64>>,
         button: Pin<Input<PullUp>>,
     }
@@ -300,6 +301,7 @@ mod app {
         radio: Option<Radio<'static>>,
         program: uart_protocol::Programs,
         idle_counter: usize,
+        tick: usize,
     }
 
     #[init(local = [memory: [u8; 4096] = [0; 4096], rxrf_buf: Queue<Packet, 4> = Queue::new(), led_buf: Queue<PwmData, 4> = Queue::new(), ser_buf: Queue<PwmData, 4> = Queue::new(), radio_buf: Queue<ieee802154::RadioReturn, 4> = Queue::new(), usbbus: Option<UsbBusAllocator<UsbBus>> = None, clock: Option<hal::clocks::Clocks<ExternalOscillator, Internal, LfOscStopped>> =
@@ -426,6 +428,9 @@ mod app {
         let mut tmr1 = StopWatch::new(ctx.device.TIMER1, 1_000_000);
         tmr1.start();
 
+        let mut tmr2 = StopWatch::new(ctx.device.TIMER2, 100_000); // 8 Hz
+        tmr2.start();
+
         let (ser_buf_producer, ser_buf_consumer) = ctx.local.ser_buf.split();
         // let (rxrf_buf_producer, rxrf_buf_consumer) = ctx.local.rxrf_buf.split();
 
@@ -436,7 +441,7 @@ mod app {
         let lcd_spi_clk = port0.p0_10.into_push_pull_output(Level::Low).degrade();
         let lcd_spi_mosi = port0.p0_09.into_push_pull_output(Level::Low).degrade();
         let lcd_spi_cs = port0.p0_07.into_push_pull_output(Level::High).degrade();
-        let lcd_rst = port0.p0_06.into_push_pull_output(Level::High).degrade();
+        let _lcd_rst = port0.p0_06.into_push_pull_output(Level::High).degrade();
         let lcd_spi_dcx = port0.p0_08.into_push_pull_output(Level::High).degrade();
 
         let pins = hal::spim::Pins {
@@ -506,6 +511,7 @@ mod app {
                 radio: Some(radio),
                 program: uart_protocol::Programs::Two,
                 idle_counter: 0,
+                tick: 0,
             },
             Local {
                 led_buf_consumer,
@@ -522,6 +528,7 @@ mod app {
                 debug_pin: pin_debug,
                 update_pin: pin_update,
                 tmr1,
+                tmr2,
                 display,
                 button,
             },
@@ -702,14 +709,11 @@ mod app {
         }
     }
 
-    #[task(local = [buf: [GRB; 64] = [GRB { r: 0, g: 0, b: 0}; 64], tick: u8 = 0, state: u8 = 0, col: u8 = 0])]
+    #[task(local = [buf: [GRB; 64] = [GRB { r: 0, g: 0, b: 0}; 64], state: u8 = 0, col: u8 = 0])]
     fn program_loop_two(ctx: program_loop_two::Context) {
         let BUF = ctx.local.buf;
         let STATE = ctx.local.state;
-        let TICK = ctx.local.tick;
         let COL = ctx.local.col;
-
-        const STEP_SIZE: u8 = 10;
 
         if let Some(mut buf) = Frame::new() {
             *STATE += 1;
@@ -892,7 +896,56 @@ mod app {
         }
     }
 
-    #[task(binds = TIMER1, shared = [idle_counter, program], local = [tmr1, led_gr, led_red, display, button])]
+    #[task(binds = TIMER2, shared = [tick], local = [tmr2, button, btn1_state: usize = 0, led_red])]
+    fn on_TIMER2(mut ctx: on_TIMER2::Context) {
+        const KEY_SHORT: usize = 10;
+
+        ctx.local.tmr2.reset_event(0);
+
+        let tick = ctx.shared.tick.lock(|t| {
+            let mut tick = *t;
+            tick += 1;
+            *t = tick;
+            tick
+        });
+
+        let button = ctx.local.button.is_low().unwrap();
+
+        let button_time = *ctx.local.btn1_state;
+
+        let delta = tick - button_time;
+
+        if button_time == 0 {
+            if button {
+                *ctx.local.btn1_state = tick;
+                defmt::println!("key: press");
+                ctx.local.led_red.set_low().unwrap();
+            }            
+        } else {
+            if button {
+                if (delta % KEY_SHORT) == 0 {
+                    defmt::println!("longkey: still pressed {}", delta);
+                }
+                if delta > KEY_SHORT {
+                    if ctx.local.led_red.is_set_high().unwrap() {
+                        ctx.local.led_red.set_low().unwrap();
+                    } else {
+                        ctx.local.led_red.set_high().unwrap();
+                    }
+                }
+            } else {
+                if delta < KEY_SHORT {
+                    defmt::println!("shortkey {}", delta);
+                } else {
+                    defmt::println!("longkey: released {}", delta);
+                }
+                *ctx.local.btn1_state = 0;
+                ctx.local.led_red.set_high().unwrap();
+            }
+        }
+    }
+
+    #[task(binds = TIMER1, shared = [idle_counter, program], local = [tmr1, led_gr, display])]
     fn on_TIMER1(mut ctx: on_TIMER1::Context) {
         ctx.local.tmr1.reset_event(0);
 
@@ -906,8 +959,8 @@ mod app {
         });
 
         let led = ctx.local.led_gr;
-        let led_red = ctx.local.led_red;
-        let button = ctx.local.button.is_low().unwrap();
+        //let led_red = ctx.local.led_red;
+        //let button = ctx.local.button.is_low().unwrap();
 
 
         if led.is_set_low().unwrap() {
@@ -928,33 +981,33 @@ mod app {
             .draw(display)
             .unwrap();
 
-        if button {
-            led_red.set_high().unwrap();
+        // if button {
+        //     led_red.set_high().unwrap();
 
-            bla.clear();
-            bla.push_str("PRG: ");
+        //     bla.clear();
+        //     bla.push_str("PRG: ");
 
-            ctx.shared.program.lock(|prg| {
-                *prg = match *prg {
-                    uart_protocol::Programs::One => {
-                        bla.push('2');
-                        uart_protocol::Programs::Two
-                    },
-                    uart_protocol::Programs::Two |
-                    uart_protocol::Programs::Serial => {
-                        bla.push('1');
-                        uart_protocol::Programs::One
-                    },
-                };
+        //     ctx.shared.program.lock(|prg| {
+        //         *prg = match *prg {
+        //             uart_protocol::Programs::One => {
+        //                 bla.push('2');
+        //                 uart_protocol::Programs::Two
+        //             },
+        //             uart_protocol::Programs::Two |
+        //             uart_protocol::Programs::Serial => {
+        //                 bla.push('1');
+        //                 uart_protocol::Programs::One
+        //             },
+        //         };
 
-            });
+        //     });
 
-            Text::with_baseline(&bla, Point::zero(), text_style, Baseline::Top)
-                .draw(display)
-                .unwrap();
-        } else {
-            led_red.set_low().unwrap();            
-        };
+        //     Text::with_baseline(&bla, Point::zero(), text_style, Baseline::Top)
+        //         .draw(display)
+        //         .unwrap();
+        // } else {
+        //     led_red.set_low().unwrap();            
+        // };
 
         display.flush().unwrap();
 
